@@ -1,8 +1,8 @@
 "use server";
 
-import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
+import { getAuthCallbackUrl } from "@/lib/app-url";
 import { createClient } from "@/lib/supabase/server";
 
 function messagePath(path: string, message: string) {
@@ -49,12 +49,10 @@ export async function signUp(formData: FormData) {
     );
   }
 
-  const headerStore = await headers();
-  const origin = headerStore.get("origin") ?? "http://localhost:3000";
   const supabase = await createClient();
   const { error } = await supabase.auth.signUp({
     ...values,
-    options: { emailRedirectTo: `${origin}/auth/callback` },
+    options: { emailRedirectTo: getAuthCallbackUrl() },
   });
 
   if (error) {

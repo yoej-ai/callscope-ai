@@ -67,11 +67,19 @@ Frontend environment variables:
 
 | Variable | Purpose |
 | --- | --- |
+| `APP_URL` | Trusted server-only application origin used for auth callbacks |
 | `NEXT_PUBLIC_SUPABASE_URL` | Public Supabase project URL |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Public Supabase anon/publishable key |
 
-Only the public Supabase URL and anon key belong in browser configuration.
-Never place a service-role key in `web/` or any `NEXT_PUBLIC_*` variable.
+For local development, set `APP_URL=http://localhost:3000`. If it is omitted while
+Next.js is running in development mode, that localhost origin is the only fallback.
+In production and other non-development environments, `APP_URL` is required and
+must be an absolute `http://` or `https://` origin without credentials, a path,
+query parameters, or a fragment. Invalid configured values always fail clearly.
+
+`APP_URL` is server-only and must never be prefixed with `NEXT_PUBLIC_`. Only the
+public Supabase URL and anon key belong in browser configuration. Never place a
+service-role key in `web/` or any `NEXT_PUBLIC_*` variable.
 
 ## Authentication architecture
 
@@ -81,12 +89,17 @@ The dashboard independently calls `auth.getUser()` on the server before renderin
 so the proxy is not treated as the authorization boundary. The database remains
 protected by RLS even if an application-layer check is missed.
 
-For hosted email confirmation, add the deployed callback URL to **Authentication
-→ URL Configuration → Redirect URLs** in Supabase:
+Sign-up confirmation always uses `${APP_URL}/auth/callback`; request `Origin` and
+`Host` headers are not trusted. Configure Supabase **Authentication → URL
+Configuration** consistently:
 
-```text
-https://your-domain.example/auth/callback
-```
+- Local Site URL: `http://localhost:3000`
+- Local allowed redirect URL: `http://localhost:3000/auth/callback`
+- Production Site URL: the exact production `APP_URL`
+- Production allowed redirect URL: the production `APP_URL` plus `/auth/callback`
+
+For example, `APP_URL=https://app.example.com` requires the allowed redirect URL
+`https://app.example.com/auth/callback`.
 
 ## Backend setup
 
@@ -142,8 +155,9 @@ RLS rules enforce the following model:
 - owners may assign `admin` or `member`; admins may assign only `member`
 - members cannot add users, change roles, or remove users
 - owners cannot demote themselves through the browser policy
-- workspace members can read calls, analyses, and usage for their tenant
-- browser roles have no mutation grants for calls, analyses, or usage events yet
+- workspace members can read calls and analyses for their tenant
+- raw `usage_events` rows have no anonymous or authenticated browser privileges
+- future usage reporting must use a narrowly scoped aggregate RPC or trusted API
 - anonymous users have no application-table privileges
 
 Membership checks run through narrowly scoped `SECURITY DEFINER` functions in the
@@ -153,7 +167,7 @@ recursive `workspace_members` policies without broadening table access.
 
 ## Supabase setup and migrations
 
-1. Install Docker and the Supabase CLI.
+1. Install Docker and Supabase CLI `2.119.0` to match CI.
 2. Start the local stack and apply migrations:
 
    ```bash
@@ -209,13 +223,15 @@ supabase test db
 
 GitHub Actions runs all three validation groups on pushes and pull requests. CI
 uses harmless public placeholders for build-time Supabase variables and contains
-no production secrets.
+no production secrets. Database CI uses the official `supabase/setup-cli` action
+at release `v3.0.1` and pins Supabase CLI `2.119.0` rather than floating on latest.
 
 ## Current limitations
 
 - workspace creation is available at the database RPC layer but has no UI yet
 - membership invitations and ownership transfer are intentionally not implemented
-- call, analysis, and usage mutation is reserved for future trusted workflows
+- call and analysis mutation is reserved for future trusted workflows
+- raw usage events have no browser access; no aggregate usage API exists yet
 - there is no audio storage, upload, transcription, LLM, vector, billing, or CRM code
 - API authentication and deployment configuration belong to a later phase
 

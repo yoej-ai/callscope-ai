@@ -3,7 +3,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set search_path = public, extensions;
 
-select plan(10);
+select plan(15);
 
 insert into auth.users (
   id, instance_id, aud, role, email, encrypted_password, email_confirmed_at,
@@ -39,6 +39,17 @@ values (
   'Fixture analysis'
 );
 
+insert into public.usage_events (
+  id, workspace_id, user_id, event_type, quantity, metadata
+) values (
+  '40000000-0000-0000-0000-000000000001',
+  '10000000-0000-0000-0000-000000000001',
+  '00000000-0000-0000-0000-000000000001',
+  'call.processed',
+  1,
+  '{"source":"fixture"}'
+);
+
 set local role authenticated;
 select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-000000000001', true);
 select is((select count(*) from public.workspaces), 1::bigint, 'owner can read own workspace');
@@ -70,6 +81,22 @@ select throws_ok(
   'member cannot add arbitrary users'
 );
 
+update public.workspaces
+set name = 'Member tampering'
+where id = '10000000-0000-0000-0000-000000000001';
+select is(
+  (select name from public.workspaces where id = '10000000-0000-0000-0000-000000000001'),
+  'Owner workspace',
+  'ordinary member cannot update workspace name'
+);
+
+select throws_ok(
+  $$select * from public.usage_events$$,
+  '42501',
+  'permission denied for table usage_events',
+  'workspace member cannot directly read raw usage events'
+);
+
 update public.profiles
 set full_name = 'Tampered'
 where id = '00000000-0000-0000-0000-000000000001';
@@ -88,7 +115,34 @@ select throws_ok(
   'anonymous users cannot access private application data'
 );
 
+select throws_ok(
+  $$select public.create_workspace('Anonymous workspace')$$,
+  '42501',
+  'permission denied for function create_workspace',
+  'anonymous user cannot execute create_workspace'
+);
+
 set local role authenticated;
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-000000000003', true);
+delete from public.workspaces
+where id = '10000000-0000-0000-0000-000000000001';
+
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-000000000001', true);
+select is(
+  (select count(*) from public.workspaces where id = '10000000-0000-0000-0000-000000000001'),
+  1::bigint,
+  'outsider cannot delete another workspace'
+);
+
+update public.workspaces
+set name = 'Renamed by owner'
+where id = '10000000-0000-0000-0000-000000000001';
+select is(
+  (select name from public.workspaces where id = '10000000-0000-0000-0000-000000000001'),
+  'Renamed by owner',
+  'owner can update workspace name'
+);
+
 select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-000000000003', true);
 select public.create_workspace(' Created safely ');
 select is(

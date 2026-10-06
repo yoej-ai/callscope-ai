@@ -342,10 +342,6 @@ create policy call_analyses_select_member
 on public.call_analyses for select to authenticated
 using (private.is_call_workspace_member(call_id));
 
-create policy usage_events_select_member
-on public.usage_events for select to authenticated
-using (private.is_workspace_member(workspace_id));
-
 revoke all on table public.profiles from anon, authenticated;
 revoke all on table public.workspaces from anon, authenticated;
 revoke all on table public.workspace_members from anon, authenticated;
@@ -364,12 +360,11 @@ grant update (role) on table public.workspace_members to authenticated;
 grant delete on table public.workspace_members to authenticated;
 grant select on table public.calls to authenticated;
 grant select on table public.call_analyses to authenticated;
-grant select on table public.usage_events to authenticated;
 
 comment on function public.create_workspace(text) is
   'Atomically creates a workspace and owner membership for auth.uid().';
 comment on table public.usage_events is
-  'Append-only application telemetry and billing usage. Browser roles have read-only access.';
+  'Append-only internal telemetry and billing usage. Browser roles have no direct table access; expose only a future trusted aggregate RPC or backend API.';
 
 commit;
 

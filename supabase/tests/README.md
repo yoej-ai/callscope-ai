@@ -1,8 +1,9 @@
 # Database security tests
 
 `0001_rls_foundation.test.sql` is a pgTAP test intended for a local Supabase stack.
-It covers owner/member visibility, tenant isolation, membership escalation, profile
-isolation, anonymous access, and atomic workspace creation.
+It covers owner/member visibility, tenant isolation, membership escalation,
+workspace mutation boundaries, raw usage-event denial, profile isolation,
+anonymous access, and atomic workspace creation.
 
 Run it after installing Docker and the Supabase CLI:
 
