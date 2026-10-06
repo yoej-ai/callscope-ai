@@ -12,7 +12,8 @@ billing and CRM systems.
 
 - Next.js 16 App Router frontend with responsive public and authenticated UI
 - Supabase email/password authentication using cookie-backed SSR sessions
-- Server-side dashboard authorization plus session refresh in `proxy.ts`
+- Server-side dashboard/onboarding authorization plus session refresh in `proxy.ts`
+- Authenticated workspace onboarding and RLS-backed workspace selection
 - PostgreSQL tenant model, constraints, indexes, triggers, and Row Level Security
 - Atomic workspace creation RPC that assigns the authenticated creator as owner
 - FastAPI service with typed configuration, logging, CORS, errors, and `/health`
@@ -61,7 +62,8 @@ npm run dev
 ```
 
 Open `http://localhost:3000`. Available routes include `/`, `/sign-up`,
-`/sign-in`, `/auth/callback`, and the protected `/dashboard`.
+`/sign-in`, `/auth/callback`, and the protected `/onboarding` and `/dashboard`
+routes.
 
 Frontend environment variables:
 
@@ -69,7 +71,7 @@ Frontend environment variables:
 | --- | --- |
 | `APP_URL` | Trusted server-only application origin used for auth callbacks |
 | `NEXT_PUBLIC_SUPABASE_URL` | Public Supabase project URL |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Public Supabase anon/publishable key |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Browser-safe Supabase publishable key |
 
 For local development, set `APP_URL=http://localhost:3000`. If it is omitted while
 Next.js is running in development mode, that localhost origin is the only fallback.
@@ -78,16 +80,18 @@ must be an absolute `http://` or `https://` origin without credentials, a path,
 query parameters, or a fragment. Invalid configured values always fail clearly.
 
 `APP_URL` is server-only and must never be prefixed with `NEXT_PUBLIC_`. Only the
-public Supabase URL and anon key belong in browser configuration. Never place a
-service-role key in `web/` or any `NEXT_PUBLIC_*` variable.
+public Supabase URL and publishable key belong in browser configuration. Put real
+local values in ignored `web/.env.local`; never commit them. Never place a Supabase
+secret or legacy service-role key in `web/` or any `NEXT_PUBLIC_*` variable.
 
 ## Authentication architecture
 
 `@supabase/ssr` provides separate browser and server clients. `proxy.ts` refreshes
-cookie-backed sessions and redirects obvious unauthenticated dashboard requests.
-The dashboard independently calls `auth.getUser()` on the server before rendering,
-so the proxy is not treated as the authorization boundary. The database remains
-protected by RLS even if an application-layer check is missed.
+cookie-backed sessions and redirects obvious unauthenticated dashboard and
+onboarding requests. Both protected pages independently call `auth.getUser()` on
+the server before rendering, so the proxy is not treated as the authorization
+boundary. The database remains protected by RLS even if an application-layer
+check is missed.
 
 Sign-up confirmation always uses `${APP_URL}/auth/callback`; request `Origin` and
 `Host` headers are not trusted. Configure Supabase **Authentication → URL
@@ -147,6 +151,18 @@ Tenant access begins with `workspace_members`. The public
 `create_workspace(p_name)` RPC validates `auth.uid()` and atomically inserts both
 the workspace and its owner membership. It never accepts an owner user ID.
 
+An authenticated user without an accessible workspace is redirected from the
+dashboard to `/onboarding`. The onboarding form calls only `create_workspace`;
+application code does not insert directly into tenant or membership tables. After
+creation, the returned workspace ID is selected through
+`/dashboard?workspace=<uuid>`.
+
+The dashboard queries `workspaces` through the signed-in SSR client and lets RLS
+determine the visible set. A requested workspace query parameter becomes active
+only when it matches that server-loaded set. Missing, malformed, stale, or
+unauthorized values fall back to the first accessible workspace ordered by
+`created_at` and then `id`, without revealing whether another tenant exists.
+
 RLS rules enforce the following model:
 
 - users can read and update only their own profile name
@@ -187,7 +203,7 @@ grants, and RLS policies, so apply it first in a non-production environment.
 
 Manual hosted-project steps:
 
-- copy the project URL and anon/publishable key into `web/.env.local`
+- copy the project URL and publishable key into ignored `web/.env.local`
 - configure the local and deployed authentication callback URLs
 - review email-provider and confirmation settings
 - apply the migration and run the security tests
@@ -228,8 +244,10 @@ at release `v3.0.1` and pins Supabase CLI `2.119.0` rather than floating on late
 
 ## Current limitations
 
-- workspace creation is available at the database RPC layer but has no UI yet
-- membership invitations and ownership transfer are intentionally not implemented
+- onboarding creates the first workspace; invitations, ownership transfer, and
+  workspace deletion UI are intentionally not implemented
+- workspace selection uses a validated URL query parameter and is not persisted
+  in local storage, cookies, or global client state
 - call and analysis mutation is reserved for future trusted workflows
 - raw usage events have no browser access; no aggregate usage API exists yet
 - there is no audio storage, upload, transcription, LLM, vector, billing, or CRM code
@@ -237,7 +255,8 @@ at release `v3.0.1` and pins Supabase CLI `2.119.0` rather than floating on late
 
 ## Recommended next phase
 
-Build the workspace onboarding flow: call `create_workspace`, add a workspace
-selector, and establish a trusted API authentication boundary. Only after tenant
-selection and authorization tests are proven should the project add Supabase
-Storage policies and an audio-upload state machine.
+Reconcile hosted migration history separately, then establish a trusted API
+authentication boundary. Only after that boundary and tenant authorization tests
+are proven should the project add Supabase Storage policies and an audio-upload
+state machine.
+
