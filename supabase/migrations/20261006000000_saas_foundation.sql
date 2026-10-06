@@ -130,7 +130,7 @@ begin
   insert into public.profiles (id, full_name)
   values (
     new.id,
-    pg_catalog.nullif(pg_catalog.btrim(new.raw_user_meta_data ->> 'full_name'), '')
+    nullif(pg_catalog.btrim(new.raw_user_meta_data ->> 'full_name'), '')
   );
   return new;
 end;
@@ -372,3 +372,4 @@ comment on table public.usage_events is
   'Append-only application telemetry and billing usage. Browser roles have read-only access.';
 
 commit;
+
