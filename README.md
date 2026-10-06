@@ -17,6 +17,8 @@ billing and CRM systems.
 - PostgreSQL tenant model, constraints, indexes, triggers, and Row Level Security
 - Atomic workspace creation RPC that assigns the authenticated creator as owner
 - FastAPI service with typed configuration, logging, CORS, errors, and `/health`
+- JWKS-verified Supabase user authentication for protected API routes
+- RLS-scoped workspace lookup through the user-authenticated Supabase Data API
 - Frontend, backend, and database-security CI jobs
 
 ## Architecture
@@ -28,13 +30,17 @@ Browser
   │       │
   │       └── Supabase PostgreSQL ── RLS is the tenant boundary
   │
-  └── FastAPI api/ ── future server-side application operations
+  └── FastAPI api/ ── verified user JWT
+          │
+          └── Supabase Data API ── user Bearer token ── PostgreSQL RLS
 ```
 
-The frontend handles presentation and authentication. FastAPI is an independent
-service boundary for future trusted workflows. PostgreSQL constraints and RLS
-provide durable data integrity and tenant isolation; neither route protection
-nor application validation replaces those database controls.
+The frontend handles presentation and the browser session. FastAPI independently
+verifies Supabase access tokens before protected API work. For tenant reads it
+forwards the verified user's token to the Supabase Data API, so PostgreSQL RLS—not
+a client-supplied user ID or privileged API key—remains the durable authorization
+boundary. Neither route protection nor application validation replaces those
+database controls.
 
 ## Repository structure
 
@@ -124,10 +130,48 @@ Backend environment variables:
 | --- | --- |
 | `APP_ENV` | Runtime environment, such as `development` or `production` |
 | `CORS_ORIGINS` | Comma-separated explicit frontend origins |
-| `SUPABASE_URL` | Supabase project URL for future server integrations |
+| `SUPABASE_URL` | Supabase project origin used to derive Auth JWKS, issuer, and Data API URLs |
+| `SUPABASE_PUBLISHABLE_KEY` | Browser-safe project key sent only as the Data API `apikey` header |
 
 `CORS_ORIGINS` must not contain `*` because credentialed requests are enabled.
-The current health endpoint does not require Supabase credentials.
+`GET /health` remains public and does not contact Supabase. Protected routes fail
+safely when their Supabase configuration is absent. Put real deployment values in
+the runtime environment or an ignored `api/.env`; the tracked example contains
+placeholders only.
+
+The API does not require a Supabase secret key, legacy `service_role` key, legacy
+JWT secret, or database password for this boundary.
+
+### API authentication and authorization
+
+Protected endpoints require `Authorization: Bearer <Supabase user access token>`.
+The API obtains asymmetric signing keys from
+`<SUPABASE_URL>/auth/v1/.well-known/jwks.json`, caches them, and refreshes the JWKS
+once when an unfamiliar key ID indicates signing-key rotation. PyJWT and
+`cryptography` verify the signature. Validation requires:
+
+- an allowed asymmetric signing algorithm (`ES256` or `RS256`)
+- the exact issuer `<SUPABASE_URL>/auth/v1`
+- the `authenticated` audience and role
+- a non-expired token
+- a UUID `sub`, which becomes the authorization identity
+
+Unsigned, malformed, expired, incorrectly signed, wrong-project, non-user, and
+publishable-key bearer credentials are rejected. Raw access tokens and complete
+claim sets are never returned by the API.
+
+Available endpoints:
+
+- `GET /health` — public liveness response
+- `GET /v1/me` — returns only the verified user UUID and safe role
+- `GET /v1/workspaces/{workspace_id}` — returns the requested workspace only when
+  it is visible through the verified user's existing RLS policies
+
+Workspace lookup sends the configured publishable key in `apikey` and the
+verified user access token in `Authorization`. It queries only the requested UUID
+and selects only `id`, `name`, and `created_at`. A missing workspace and a
+workspace hidden by another tenant's RLS policy both return the same generic 404;
+the API performs no privileged existence check.
 
 ## Database overview
 
@@ -248,15 +292,15 @@ at release `v3.0.1` and pins Supabase CLI `2.119.0` rather than floating on late
   workspace deletion UI are intentionally not implemented
 - workspace selection uses a validated URL query parameter and is not persisted
   in local storage, cookies, or global client state
+- the frontend does not yet call the protected FastAPI endpoints
+- JWKS and workspace reads require the configured Supabase service to be reachable
 - call and analysis mutation is reserved for future trusted workflows
 - raw usage events have no browser access; no aggregate usage API exists yet
 - there is no audio storage, upload, transcription, LLM, vector, billing, or CRM code
-- API authentication and deployment configuration belong to a later phase
 
 ## Recommended next phase
 
-Reconcile hosted migration history separately, then establish a trusted API
-authentication boundary. Only after that boundary and tenant authorization tests
-are proven should the project add Supabase Storage policies and an audio-upload
-state machine.
+Integrate the frontend with the proven authenticated API boundary. Only after that
+integration is validated should the project design Supabase Storage policies and
+an audio-upload state machine.
 
