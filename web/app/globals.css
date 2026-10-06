@@ -23,7 +23,7 @@ body {
 }
 
 a { color: inherit; }
-button, input { font: inherit; }
+button, input, select { font: inherit; }
 
 .site-header,
 .dashboard-nav {
@@ -66,7 +66,8 @@ button, input { font: inherit; }
 }
 
 .button:hover { transform: translateY(-2px); }
-.button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid var(--coral); outline-offset: 3px; }
+.button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible { outline: 3px solid var(--coral); outline-offset: 3px; }
+.button:disabled { cursor: wait; opacity: .68; transform: none; }
 .button.primary { background: var(--forest); color: white; }
 .button.primary:hover { background: var(--forest-dark); }
 .button.secondary { border-color: var(--ink); }
@@ -149,10 +150,21 @@ h1, h2, h3, p { margin-top: 0; }
 .dashboard-nav nav { color: var(--muted); font-size: .86rem; }
 .dashboard-main { margin: 0 auto; max-width: 1120px; padding: 100px 28px; }
 .dashboard-main h1 { font-size: clamp(2.8rem, 6vw, 5.5rem); letter-spacing: -0.07em; line-height: .95; max-width: 850px; }
+.workspace-header { align-items: end; display: flex; gap: 36px; justify-content: space-between; }
+.workspace-header h1 { margin-bottom: 0; }
+.workspace-switcher { flex: 0 0 300px; }
+.workspace-switcher label { display: block; font-size: .82rem; font-weight: 700; margin-bottom: 8px; }
+.workspace-switcher > div { display: flex; gap: 8px; }
+.workspace-select { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; min-height: 42px; min-width: 0; padding: 0 12px; width: 100%; }
 .empty-state { align-items: center; background: var(--surface); border: 1px solid var(--line); border-radius: 22px; display: flex; gap: 24px; margin-top: 60px; padding: 32px; }
 .empty-state h2 { margin-bottom: 6px; }
 .empty-state p { color: var(--muted); margin: 0; }
 .empty-icon { align-items: center; background: var(--lime); border-radius: 50%; display: flex; flex: 0 0 58px; font-size: 2rem; height: 58px; justify-content: center; }
+
+.onboarding-main { align-items: center; display: flex; justify-content: center; min-height: calc(100vh - 94px); padding: 48px 28px; }
+.onboarding-card { background: var(--surface); border: 1px solid var(--line); border-radius: 28px; box-shadow: var(--shadow); max-width: 560px; padding: clamp(30px, 6vw, 58px); width: 100%; }
+.onboarding-card h1 { font-size: clamp(2.6rem, 7vw, 4.6rem); letter-spacing: -0.065em; line-height: .95; margin: 18px 0; }
+.onboarding-card .button.secondary { margin-top: 18px; }
 
 .status-page { flex-direction: column; text-align: center; }
 .status-page h1 { font-size: clamp(2.5rem, 6vw, 5rem); letter-spacing: -0.06em; margin-bottom: 16px; }
@@ -165,6 +177,8 @@ h1, h2, h3, p { margin-top: 0; }
   .signal-card { transform: none; }
   .outcome-grid { grid-template-columns: 1fr; }
   .dashboard-nav nav > span { display: none; }
+  .workspace-header { align-items: stretch; flex-direction: column; }
+  .workspace-switcher { flex-basis: auto; max-width: 420px; }
 }
 
 @media (max-width: 520px) {
@@ -175,9 +189,11 @@ h1, h2, h3, p { margin-top: 0; }
   .auth-shell { padding: 16px; }
   .auth-card { border-radius: 20px; }
   .empty-state { align-items: flex-start; }
+  .workspace-switcher > div { align-items: stretch; flex-direction: column; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   * { scroll-behavior: auto !important; transition: none !important; }
   .spinner { animation: none; }
 }
+

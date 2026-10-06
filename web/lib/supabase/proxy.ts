@@ -5,8 +5,8 @@ import { getSupabaseEnv } from "@/lib/supabase/env";
 
 export async function updateSession(request: NextRequest) {
   let response = NextResponse.next({ request });
-  const { url, anonKey } = getSupabaseEnv();
-  const supabase = createServerClient(url, anonKey, {
+  const { url, publishableKey } = getSupabaseEnv();
+  const supabase = createServerClient(url, publishableKey, {
     cookies: {
       getAll: () => request.cookies.getAll(),
       setAll(cookiesToSet) {
@@ -22,9 +22,13 @@ export async function updateSession(request: NextRequest) {
   });
 
   const { data } = await supabase.auth.getClaims();
-  const isDashboardRoute = request.nextUrl.pathname.startsWith("/dashboard");
+  const isProtectedRoute = ["/dashboard", "/onboarding"].some(
+    (path) =>
+      request.nextUrl.pathname === path ||
+      request.nextUrl.pathname.startsWith(`${path}/`),
+  );
 
-  if (isDashboardRoute && !data?.claims) {
+  if (isProtectedRoute && !data?.claims) {
     const signInUrl = request.nextUrl.clone();
     signInUrl.pathname = "/sign-in";
     signInUrl.searchParams.set("message", "Please sign in to continue.");
@@ -33,3 +37,4 @@ export async function updateSession(request: NextRequest) {
 
   return response;
 }
+
