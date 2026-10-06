@@ -70,7 +70,7 @@ class SupabaseWorkspaceClient:
         except httpx.HTTPError as exc:
             raise SupabaseDataUnavailable from exc
 
-        if response.status_code in {401, 403}:
+        if response.status_code == 401:
             raise SupabaseAuthenticationRejected
         if response.status_code < 200 or response.status_code >= 300:
             raise SupabaseDataUnavailable

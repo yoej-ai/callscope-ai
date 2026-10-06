@@ -122,6 +122,24 @@ def test_upstream_authentication_rejection_is_safe() -> None:
     assert "sensitive upstream detail" not in response.text
 
 
+def test_upstream_forbidden_returns_safe_service_unavailable() -> None:
+    key = SigningKey()
+    token = key.token()
+
+    def workspace_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, json={"message": "sensitive policy detail"})
+
+    response = build_test_client(key, workspace_handler=workspace_handler).get(
+        f"/v1/workspaces/{WORKSPACE_ID}",
+        headers=bearer(token),
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Workspace service is unavailable."}
+    assert "sensitive policy detail" not in response.text
+    assert_secret_not_exposed(response.text, token)
+
+
 def test_upstream_outage_returns_safe_service_unavailable() -> None:
     key = SigningKey()
 

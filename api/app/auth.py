@@ -12,6 +12,7 @@ from fastapi import Depends, Header, HTTPException, Request, status
 from app.config import Settings
 
 ALLOWED_JWT_ALGORITHMS = frozenset({"ES256", "RS256"})
+EXPECTED_JWK_TYPES = {"ES256": "EC", "RS256": "RSA"}
 AUTHENTICATED_AUDIENCE = "authenticated"
 AUTHENTICATED_ROLE = "authenticated"
 BEARER_CHALLENGE = {"WWW-Authenticate": "Bearer"}
@@ -66,6 +67,8 @@ class JwksCache:
         key_algorithm = key_data.get("alg")
         if key_algorithm is not None and key_algorithm != algorithm:
             raise InvalidAccessToken("Signing key algorithm mismatch")
+        if key_data.get("kty") != EXPECTED_JWK_TYPES[algorithm]:
+            raise InvalidAccessToken("Signing key type mismatch")
         if key_data.get("use") not in {None, "sig"}:
             raise InvalidAccessToken("Signing key is not valid for signatures")
 

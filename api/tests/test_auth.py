@@ -126,8 +126,9 @@ def test_me_rejects_non_uuid_subject() -> None:
     assert response.status_code == 401
 
 
-def test_me_returns_identity_from_verified_subject() -> None:
-    key = SigningKey()
+@pytest.mark.parametrize("algorithm", ["RS256", "ES256"])
+def test_me_accepts_supported_asymmetric_token(algorithm: str) -> None:
+    key = SigningKey(algorithm=algorithm)
     token = key.token()
 
     response = build_test_client(key).get("/v1/me", headers=bearer(token))
@@ -137,6 +138,25 @@ def test_me_returns_identity_from_verified_subject() -> None:
         "user_id": str(TEST_USER_ID),
         "role": "authenticated",
     }
+    assert_secret_not_exposed(response.text, token)
+
+
+def test_me_rejects_algorithm_and_key_type_mismatch() -> None:
+    signing_key = SigningKey(algorithm="RS256")
+    mismatched_key = SigningKey(algorithm="ES256", kid=signing_key.kid)
+    mismatched_jwk = {**mismatched_key.public_jwk, "alg": "RS256"}
+    token = signing_key.token()
+
+    def jwks_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"keys": [mismatched_jwk]})
+
+    response = build_test_client(signing_key, jwks_handler=jwks_handler).get(
+        "/v1/me",
+        headers=bearer(token),
+    )
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Invalid or missing bearer token."}
     assert_secret_not_exposed(response.text, token)
 
 

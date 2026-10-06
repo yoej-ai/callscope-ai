@@ -1,12 +1,12 @@
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from hmac import compare_digest
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 import httpx2 as httpx
 import jwt
-from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from fastapi.testclient import TestClient
 
 from app.auth import JwksCache, SupabaseJwtVerifier
@@ -18,20 +18,34 @@ TEST_SUPABASE_URL = "https://test-project.supabase.co"
 TEST_PUBLISHABLE_KEY = "test-publishable-key"
 TEST_KEY_ID = "test-signing-key"
 TEST_USER_ID = UUID("4dd668d0-d998-4d97-a5c1-cd3089ff30f7")
+SigningAlgorithm = Literal["ES256", "RS256"]
 
 
 class SigningKey:
-    def __init__(self, *, kid: str = TEST_KEY_ID) -> None:
+    def __init__(
+        self,
+        *,
+        algorithm: SigningAlgorithm = "RS256",
+        kid: str = TEST_KEY_ID,
+    ) -> None:
+        self.algorithm = algorithm
         self.kid = kid
-        self.private_key = rsa.generate_private_key(
-            public_exponent=65537,
-            key_size=2048,
-        )
-        public_jwk = jwt.algorithms.RSAAlgorithm.to_jwk(
-            self.private_key.public_key(),
-            as_dict=True,
-        )
-        public_jwk.update({"alg": "RS256", "kid": kid, "use": "sig"})
+        if algorithm == "RS256":
+            self.private_key = rsa.generate_private_key(
+                public_exponent=65537,
+                key_size=2048,
+            )
+            public_jwk = jwt.algorithms.RSAAlgorithm.to_jwk(
+                self.private_key.public_key(),
+                as_dict=True,
+            )
+        else:
+            self.private_key = ec.generate_private_key(ec.SECP256R1())
+            public_jwk = jwt.algorithms.ECAlgorithm.to_jwk(
+                self.private_key.public_key(),
+                as_dict=True,
+            )
+        public_jwk.update({"alg": algorithm, "kid": kid, "use": "sig"})
         self.public_jwk = public_jwk
 
     def token(
@@ -55,7 +69,7 @@ class SigningKey:
         return jwt.encode(
             claims,
             self.private_key,
-            algorithm="RS256",
+            algorithm=self.algorithm,
             headers={"kid": self.kid},
         )
 
