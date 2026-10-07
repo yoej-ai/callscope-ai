@@ -14,6 +14,7 @@ billing and CRM systems.
 - Supabase email/password authentication using cookie-backed SSR sessions
 - Server-side dashboard/onboarding authorization plus session refresh in `proxy.ts`
 - Authenticated workspace onboarding and RLS-backed workspace selection
+- Server-side Next.js integration with the authenticated FastAPI boundary
 - PostgreSQL tenant model, constraints, indexes, triggers, and Row Level Security
 - Atomic workspace creation RPC that assigns the authenticated creator as owner
 - FastAPI service with typed configuration, logging, CORS, errors, and `/health`
@@ -26,21 +27,28 @@ billing and CRM systems.
 ```text
 Browser
   │
-  ├── Next.js web/ ── cookie-backed Supabase Auth
-  │       │
-  │       └── Supabase PostgreSQL ── RLS is the tenant boundary
-  │
-  └── FastAPI api/ ── verified user JWT
+  └── Next.js web/ ── cookie-backed Supabase Auth
           │
-          └── Supabase Data API ── user Bearer token ── PostgreSQL RLS
+          ├── Supabase PostgreSQL ── RLS-visible workspace switcher
+          │
+          └── FastAPI api/ ── independently verified user JWT
+                  │
+                  └── Supabase Data API ── user Bearer token ── PostgreSQL RLS
 ```
 
-The frontend handles presentation and the browser session. FastAPI independently
-verifies Supabase access tokens before protected API work. For tenant reads it
-forwards the verified user's token to the Supabase Data API, so PostgreSQL RLS—not
-a client-supplied user ID or privileged API key—remains the durable authorization
-boundary. Neither route protection nor application validation replaces those
-database controls.
+The frontend handles presentation and the browser session. Protected dashboard
+requests first establish trusted identity with Supabase `auth.getUser()` on the
+Next.js server. Only afterward does server code use `auth.getSession()` to obtain
+the access token for forwarding; session data and `session.user` are not treated
+as the authorization authority. The token is never passed to a Client Component
+or rendered into the page.
+
+Next.js forwards the user access token to FastAPI using the server-only `API_URL`.
+FastAPI independently verifies the token before protected API work. For tenant
+reads it forwards that same user token to the Supabase Data API, so PostgreSQL
+RLS—not a client-supplied user ID or privileged API key—remains the durable
+authorization boundary. Neither route protection nor application validation
+replaces those database controls, and no service-role key is involved.
 
 ## Repository structure
 
@@ -76,19 +84,27 @@ Frontend environment variables:
 | Variable | Purpose |
 | --- | --- |
 | `APP_URL` | Trusted server-only application origin used for auth callbacks |
+| `API_URL` | Server-only FastAPI origin used by protected dashboard requests |
 | `NEXT_PUBLIC_SUPABASE_URL` | Public Supabase project URL |
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Browser-safe Supabase publishable key |
 
-For local development, set `APP_URL=http://localhost:3000`. If it is omitted while
-Next.js is running in development mode, that localhost origin is the only fallback.
-In production and other non-development environments, `APP_URL` is required and
-must be an absolute `http://` or `https://` origin without credentials, a path,
-query parameters, or a fragment. Invalid configured values always fail clearly.
+For local development, set `APP_URL=http://localhost:3000` and
+`API_URL=http://127.0.0.1:8000`. `API_URL` is loaded lazily only when protected
+FastAPI-backed functionality runs. It accepts HTTPS origins and permits HTTP only
+for `localhost` or `127.0.0.1`; credentials, paths, queries, fragments, and
+malformed URLs are rejected.
 
-`APP_URL` is server-only and must never be prefixed with `NEXT_PUBLIC_`. Only the
-public Supabase URL and publishable key belong in browser configuration. Put real
-local values in ignored `web/.env.local`; never commit them. Never place a Supabase
-secret or legacy service-role key in `web/` or any `NEXT_PUBLIC_*` variable.
+If `APP_URL` is omitted while Next.js is running in development mode, its
+localhost origin is the only fallback. In production and other non-development
+environments, `APP_URL` is required and must be an absolute `http://` or `https://`
+origin without credentials, a path, query parameters, or a fragment. Invalid
+configured values always fail clearly.
+
+`APP_URL` and `API_URL` are server-only and must never be prefixed with
+`NEXT_PUBLIC_`. Only the public Supabase URL and publishable key belong in browser
+configuration. Put real local values in ignored `web/.env.local`; never commit
+them. Never place a Supabase secret or legacy service-role key in `web/` or any
+`NEXT_PUBLIC_*` variable.
 
 ## Authentication architecture
 
@@ -98,6 +114,16 @@ onboarding requests. Both protected pages independently call `auth.getUser()` on
 the server before rendering, so the proxy is not treated as the authorization
 boundary. The database remains protected by RLS even if an application-layer
 check is missed.
+
+On the dashboard, the RLS-visible workspace list still comes from the signed-in
+Supabase SSR client and determines the only acceptable active workspace IDs. Once
+`auth.getUser()` has established the user, server code retrieves the session only
+to obtain its access token. It then calls FastAPI `/v1/me`, compares the verified
+API `user_id` to the trusted Supabase user ID, and calls
+`/v1/workspaces/{workspace_id}`. The returned workspace ID must match the requested
+RLS-visible ID before its name is displayed. Authentication, identity, workspace,
+network, and response-shape failures stop the flow with a safe error; the frontend
+does not silently bypass FastAPI.
 
 Sign-up confirmation always uses `${APP_URL}/auth/callback`; request `Origin` and
 `Host` headers are not trusted. Configure Supabase **Authentication → URL
@@ -292,7 +318,8 @@ at release `v3.0.1` and pins Supabase CLI `2.119.0` rather than floating on late
   workspace deletion UI are intentionally not implemented
 - workspace selection uses a validated URL query parameter and is not persisted
   in local storage, cookies, or global client state
-- the frontend does not yet call the protected FastAPI endpoints
+- FastAPI integration is server-side; browsers do not manually receive its bearer
+  token through rendered props or client state
 - JWKS and workspace reads require the configured Supabase service to be reachable
 - call and analysis mutation is reserved for future trusted workflows
 - raw usage events have no browser access; no aggregate usage API exists yet
@@ -300,7 +327,8 @@ at release `v3.0.1` and pins Supabase CLI `2.119.0` rather than floating on late
 
 ## Recommended next phase
 
-Integrate the frontend with the proven authenticated API boundary. Only after that
-integration is validated should the project design Supabase Storage policies and
-an audio-upload state machine.
+Validate the authenticated frontend-to-API flow with a real signed-in test user.
+Only after that validation should the project design Supabase Storage policies and
+an audio-upload state machine. Audio upload, Storage, transcription, and analysis
+are not implemented yet.
 

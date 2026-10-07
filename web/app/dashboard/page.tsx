@@ -1,5 +1,11 @@
 import { redirect } from "next/navigation";
 
+import {
+  ApiClientError,
+  type ApiErrorKind,
+  getApiIdentity,
+  getApiWorkspace,
+} from "@/lib/api/client";
 import { DashboardNav } from "@/components/dashboard-nav";
 import { createClient } from "@/lib/supabase/server";
 import { listAccessibleWorkspaces } from "@/lib/workspaces";
@@ -7,6 +13,36 @@ import { listAccessibleWorkspaces } from "@/lib/workspaces";
 type DashboardPageProps = {
   searchParams: Promise<{ workspace?: string | string[] }>;
 };
+
+type DashboardApiErrorProps = {
+  email: string;
+  kind: Exclude<ApiErrorKind, "authentication">;
+};
+
+function DashboardApiError({ email, kind }: DashboardApiErrorProps) {
+  const unavailable = kind === "unavailable";
+
+  return (
+    <div className="dashboard-shell">
+      <DashboardNav email={email} />
+      <main className="dashboard-main">
+        <section className="empty-state" role="alert">
+          <div className="empty-icon" aria-hidden="true">
+            !
+          </div>
+          <div>
+            <h1>
+              {unavailable
+                ? "The secure workspace service is temporarily unavailable."
+                : "We could not securely load this workspace."}
+            </h1>
+            <p>Please refresh the page and try again.</p>
+          </div>
+        </section>
+      </main>
+    </div>
+  );
+}
 
 export default async function DashboardPage({
   searchParams,
@@ -57,6 +93,107 @@ export default async function DashboardPage({
     workspaces.find((workspace) => workspace.id === requestedWorkspaceId) ??
     workspaces[0];
 
+  const {
+    data: { session },
+    error: sessionError,
+  } = await supabase.auth.getSession();
+
+  if (sessionError || !session?.access_token) {
+    redirect(
+      "/sign-in?message=Your%20session%20could%20not%20be%20verified.%20Please%20sign%20in%20again.",
+    );
+  }
+
+  let apiIdentity;
+  try {
+    apiIdentity = await getApiIdentity(session.access_token);
+  } catch (error) {
+    if (error instanceof ApiClientError) {
+      if (error.kind === "authentication") {
+        redirect(
+          "/sign-in?message=Your%20session%20could%20not%20be%20verified.%20Please%20sign%20in%20again.",
+        );
+      }
+
+      console.error("Secure API identity verification failed", {
+        kind: error.kind,
+        status: error.status,
+      });
+      return (
+        <DashboardApiError
+          email={user.email ?? "Signed-in user"}
+          kind={error.kind}
+        />
+      );
+    }
+
+    console.error("Secure API identity verification failed unexpectedly");
+    return (
+      <DashboardApiError
+        email={user.email ?? "Signed-in user"}
+        kind="invalid-response"
+      />
+    );
+  }
+
+  if (apiIdentity.user_id !== user.id) {
+    console.error("Secure API identity did not match the trusted user");
+    return (
+      <DashboardApiError
+        email={user.email ?? "Signed-in user"}
+        kind="invalid-response"
+      />
+    );
+  }
+
+  let apiWorkspace;
+  try {
+    apiWorkspace = await getApiWorkspace(
+      session.access_token,
+      activeWorkspace.id,
+    );
+  } catch (error) {
+    if (error instanceof ApiClientError) {
+      if (error.kind === "authentication") {
+        redirect(
+          "/sign-in?message=Your%20session%20could%20not%20be%20verified.%20Please%20sign%20in%20again.",
+        );
+      }
+
+      console.error("Secure workspace lookup failed", {
+        kind: error.kind,
+        status: error.status,
+        workspaceId: activeWorkspace.id,
+      });
+      return (
+        <DashboardApiError
+          email={user.email ?? "Signed-in user"}
+          kind={error.kind}
+        />
+      );
+    }
+
+    console.error("Secure workspace lookup failed unexpectedly", {
+      workspaceId: activeWorkspace.id,
+    });
+    return (
+      <DashboardApiError
+        email={user.email ?? "Signed-in user"}
+        kind="invalid-response"
+      />
+    );
+  }
+
+  if (apiWorkspace.id !== activeWorkspace.id) {
+    console.error("Secure API workspace did not match the requested workspace");
+    return (
+      <DashboardApiError
+        email={user.email ?? "Signed-in user"}
+        kind="invalid-response"
+      />
+    );
+  }
+
   return (
     <div className="dashboard-shell">
       <DashboardNav email={user.email ?? "Signed-in user"} />
@@ -64,7 +201,7 @@ export default async function DashboardPage({
         <section className="workspace-header" aria-labelledby="workspace-title">
           <div>
             <p className="eyebrow">Active workspace</p>
-            <h1 id="workspace-title">{activeWorkspace.name}</h1>
+            <h1 id="workspace-title">{apiWorkspace.name}</h1>
           </div>
           <form action="/dashboard" className="workspace-switcher" method="get">
             <label htmlFor="workspace">Switch workspace</label>
