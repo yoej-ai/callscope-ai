@@ -214,6 +214,16 @@ that exact path. FastAPI uses the user's bearer token plus the publishable key t
 create the pending row and request a signed upload token; it does not use a
 secret or service-role credential.
 
+The dashboard provides a single-recording upload form and RLS-scoped call history.
+The browser asks same-origin Next.js Route Handlers to initiate and complete an
+upload. Those handlers re-establish the user with `auth.getUser()`, verify that the
+workspace is in the user's RLS-visible set, and only then obtain the session token
+for server-to-server FastAPI calls. The raw bearer token never enters Client
+Component props or browser application state. The browser uploads the file itself
+only to the short-lived, signed private Storage target returned by the initiate
+handler; the signed token is neither persisted nor placed in a URL by application
+code.
+
 Accepted files are MP3, MP4 audio, M4A, WAV, WebM audio, and Ogg audio, with a
 maximum declared size of 25 MiB. Filename extension, MIME type, and size must all
 pass both API and database validation. Completion is a separate, idempotent step
@@ -348,10 +358,10 @@ at release `v3.0.1` and pins Supabase CLI `2.119.0` rather than floating on late
 - FastAPI integration is server-side; browsers do not manually receive its bearer
   token through rendered props or client state
 - JWKS and workspace reads require the configured Supabase service to be reachable
-- call and analysis mutation is reserved for future trusted workflows
+- analysis mutation is reserved for future trusted workflows
 - raw usage events have no browser access; no aggregate usage API exists yet
-- private audio ingestion is available, but there is no upload UI, byte-level
-  media validation, transcription, LLM, vector, billing, or CRM code
+- private audio ingestion and workspace call history are available, but there is
+  no byte-level media validation, transcription, LLM, vector, billing, or CRM code
 
 ## Recommended next phase
 

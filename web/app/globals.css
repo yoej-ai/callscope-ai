@@ -161,6 +161,36 @@ h1, h2, h3, p { margin-top: 0; }
 .empty-state p { color: var(--muted); margin: 0; }
 .empty-icon { align-items: center; background: var(--lime); border-radius: 50%; display: flex; flex: 0 0 58px; font-size: 2rem; height: 58px; justify-content: center; }
 
+.dashboard-content { align-items: start; display: grid; gap: 22px; grid-template-columns: minmax(280px, .78fr) minmax(0, 1.22fr); margin-top: 58px; }
+.upload-card, .call-history { background: var(--surface); border: 1px solid var(--line); border-radius: 24px; padding: clamp(24px, 4vw, 34px); }
+.upload-card h2, .call-history h2 { font-size: clamp(1.65rem, 3vw, 2.25rem); letter-spacing: -.045em; margin: 8px 0 10px; }
+.upload-guidance { color: var(--muted); line-height: 1.5; margin-bottom: 26px; }
+.upload-form { display: grid; gap: 12px; }
+.upload-form label { font-size: .84rem; font-weight: 750; }
+.upload-form input[type="file"] { background: white; border: 1px solid var(--line); border-radius: 13px; color: var(--muted); max-width: 100%; min-width: 0; padding: 10px; width: 100%; }
+.upload-form input[type="file"]::file-selector-button { background: var(--paper); border: 0; border-radius: 9px; color: var(--ink); cursor: pointer; font-weight: 700; margin-right: 12px; padding: 10px 12px; }
+.upload-form .button { margin-top: 4px; width: 100%; }
+.upload-status { align-items: center; border-radius: 12px; color: var(--muted); display: flex; font-size: .9rem; gap: 10px; margin-top: 16px; min-height: 42px; padding: 10px 12px; }
+.upload-status.complete { background: #edf4db; color: var(--forest-dark); }
+.upload-status.error { background: #fff0eb; color: #8f2f19; }
+.status-pulse { animation: pulse 1s ease-in-out infinite alternate; background: var(--forest); border-radius: 50%; flex: 0 0 9px; height: 9px; width: 9px; }
+@keyframes pulse { from { opacity: .35; } to { opacity: 1; } }
+.section-heading { align-items: center; display: flex; gap: 18px; justify-content: space-between; }
+.call-count { background: var(--paper); border-radius: 999px; color: var(--muted); font-size: .78rem; font-weight: 700; padding: 7px 11px; white-space: nowrap; }
+.call-list { display: grid; list-style: none; margin: 20px 0 0; padding: 0; }
+.call-row { align-items: center; border-top: 1px solid var(--line); display: flex; gap: 22px; justify-content: space-between; min-width: 0; padding: 18px 0; }
+.call-primary { min-width: 0; }
+.call-primary strong { display: block; overflow-wrap: anywhere; }
+.call-primary span, .call-secondary time { color: var(--muted); display: block; font-size: .78rem; margin-top: 6px; }
+.call-secondary { flex: 0 0 auto; text-align: right; }
+.call-status { background: var(--paper); border-radius: 999px; display: inline-block; font-size: .72rem; font-weight: 800; padding: 6px 9px; text-transform: capitalize; }
+.call-status.uploaded, .call-status.completed { background: #edf4db; color: var(--forest-dark); }
+.call-status.failed { background: #fff0eb; color: #8f2f19; }
+.call-status.processing { background: #fff4cd; color: #6c5011; }
+.call-list-message { border-top: 1px solid var(--line); display: grid; gap: 6px; margin-top: 20px; padding: 24px 0 4px; }
+.call-list-message span { color: var(--muted); }
+.call-list-message.error strong { color: #8f2f19; }
+
 .onboarding-main { align-items: center; display: flex; justify-content: center; min-height: calc(100vh - 94px); padding: 48px 28px; }
 .onboarding-card { background: var(--surface); border: 1px solid var(--line); border-radius: 28px; box-shadow: var(--shadow); max-width: 560px; padding: clamp(30px, 6vw, 58px); width: 100%; }
 .onboarding-card h1 { font-size: clamp(2.6rem, 7vw, 4.6rem); letter-spacing: -0.065em; line-height: .95; margin: 18px 0; }
@@ -179,6 +209,7 @@ h1, h2, h3, p { margin-top: 0; }
   .dashboard-nav nav > span { display: none; }
   .workspace-header { align-items: stretch; flex-direction: column; }
   .workspace-switcher { flex-basis: auto; max-width: 420px; }
+  .dashboard-content { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 520px) {
@@ -190,10 +221,13 @@ h1, h2, h3, p { margin-top: 0; }
   .auth-card { border-radius: 20px; }
   .empty-state { align-items: flex-start; }
   .workspace-switcher > div { align-items: stretch; flex-direction: column; }
+  .dashboard-main { padding: 64px 20px; }
+  .call-row { align-items: flex-start; flex-direction: column; gap: 12px; }
+  .call-secondary { text-align: left; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   * { scroll-behavior: auto !important; transition: none !important; }
-  .spinner { animation: none; }
+  .spinner, .status-pulse { animation: none; }
 }
 
