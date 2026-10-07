@@ -7,6 +7,7 @@ from app.audio_uploads import (
     FinalizedCallUpload,
     InitiateCallUploadRequest,
     SignedCallUpload,
+    UploadReconciliationResult,
 )
 from app.auth import BEARER_CHALLENGE, CurrentUser, get_current_user
 from app.supabase_data import (
@@ -33,6 +34,13 @@ class AudioUploadService(Protocol):
         call_id: UUID,
         current_user: CurrentUser,
     ) -> FinalizedCallUpload | None: ...
+
+    async def reconcile_uploads(
+        self,
+        *,
+        workspace_id: UUID,
+        current_user: CurrentUser,
+    ) -> UploadReconciliationResult | None: ...
 
 
 def get_audio_upload_service(request: Request) -> AudioUploadService:
@@ -102,6 +110,36 @@ async def complete_call_upload(
             detail="Call upload not found.",
         )
     return upload
+
+
+@router.post(
+    "/{workspace_id}/calls/uploads/reconcile",
+    response_model=UploadReconciliationResult,
+)
+async def reconcile_call_uploads(
+    workspace_id: UUID,
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+    upload_service: Annotated[AudioUploadService, Depends(get_audio_upload_service)],
+) -> UploadReconciliationResult:
+    try:
+        result = await upload_service.reconcile_uploads(
+            workspace_id=workspace_id,
+            current_user=current_user,
+        )
+    except SupabaseAuthenticationRejected as exc:
+        raise _session_rejected() from exc
+    except SupabaseDataUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Upload service is unavailable.",
+        ) from exc
+
+    if result is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Workspace not found.",
+        )
+    return result
 
 
 def _session_rejected() -> HTTPException:

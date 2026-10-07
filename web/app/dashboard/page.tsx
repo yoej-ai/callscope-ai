@@ -9,6 +9,10 @@ import {
 import { isUuid } from "@/lib/api/types";
 import { CallUpload } from "@/components/call-upload";
 import { DashboardNav } from "@/components/dashboard-nav";
+import {
+  PendingUploadRecovery,
+  StaleUploadReconciliation,
+} from "@/components/upload-recovery";
 import { createClient } from "@/lib/supabase/server";
 import { listAccessibleWorkspaces } from "@/lib/workspaces";
 
@@ -334,9 +338,12 @@ export default async function DashboardPage({
                 <p className="eyebrow">Recent activity</p>
                 <h2 id="call-history-title">Call history</h2>
               </div>
-              {!callListFailed && calls.length > 0 && (
-                <span className="call-count">Latest {calls.length}</span>
-              )}
+              <div className="history-actions">
+                {!callListFailed && calls.length > 0 && (
+                  <span className="call-count">Latest {calls.length}</span>
+                )}
+                <StaleUploadReconciliation workspaceId={activeWorkspace.id} />
+              </div>
             </div>
 
             {callListFailed ? (
@@ -367,6 +374,12 @@ export default async function DashboardPage({
                       <time dateTime={call.uploadCompletedAt ?? call.createdAt}>
                         {formatDate(call.uploadCompletedAt ?? call.createdAt)}
                       </time>
+                      {call.status === "pending_upload" && (
+                        <PendingUploadRecovery
+                          callId={call.id}
+                          workspaceId={activeWorkspace.id}
+                        />
+                      )}
                     </div>
                   </li>
                 ))}
