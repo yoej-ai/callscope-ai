@@ -21,6 +21,7 @@ transcribe calls, invoke LLMs, or integrate with billing and CRM systems.
 - JWKS-verified Supabase user authentication for protected API routes
 - RLS-scoped workspace lookup through the user-authenticated Supabase Data API
 - Private Supabase Storage uploads initiated and finalized through FastAPI
+- User-triggered recovery for interrupted and stale pending uploads
 - Frontend, backend, and database-security CI jobs
 
 ## Architecture
@@ -197,6 +198,8 @@ Available endpoints:
   returns a short-lived signed upload target for its database-generated path
 - `POST /v1/workspaces/{workspace_id}/calls/{call_id}/complete` — verifies the
   exact stored object's metadata and moves the call to `uploaded`
+- `POST /v1/workspaces/{workspace_id}/calls/uploads/reconcile` — reconciles a
+  bounded batch of the authenticated user's stale pending uploads
 
 Workspace lookup sends the configured publishable key in `apikey` and the
 verified user access token in `Authorization`. It queries only the requested UUID
@@ -230,6 +233,25 @@ pass both API and database validation. Completion is a separate, idempotent step
 that checks the exact Storage object and its recorded size and MIME type before
 marking the call `uploaded`. Browser clients receive no general object update,
 delete, or listing capability.
+
+If signed-token creation fails before the browser can begin uploading, FastAPI
+uses the existing authenticated abort helper to remove the unused pending row.
+Once a browser Storage request has started, an error can be ambiguous, so the row
+remains pending instead of being deleted. The dashboard refreshes call history and
+allows the user to retry the existing exact finalization check.
+
+Users can also trigger a bounded reconciliation of up to 20 of their own pending
+uploads that are at least four hours old. The fixed four-hour threshold is longer
+than the two-hour signed-upload lifetime and cannot be supplied by the browser.
+Reconciliation uses row locks, removes a stale row only when its exact object is
+absent, marks it uploaded only when exact size and MIME metadata match, and marks
+metadata mismatches failed. It does not delete Storage objects or add Storage
+read, update, or delete policies.
+
+The pgTAP suite verifies the locking clauses and their observable state changes,
+but does not simulate two truly concurrent database sessions. Production
+reconciliation therefore keeps the conservative age threshold and skip-locked
+row processing as defense in depth.
 
 This phase establishes ingestion only: it does not inspect file bytes or run
 transcription. A later trusted worker must verify the actual media bytes before
@@ -362,6 +384,8 @@ at release `v3.0.1` and pins Supabase CLI `2.119.0` rather than floating on late
 - raw usage events have no browser access; no aggregate usage API exists yet
 - private audio ingestion and workspace call history are available, but there is
   no byte-level media validation, transcription, LLM, vector, billing, or CRM code
+- stale reconciliation is user-triggered and bounded; automatic scheduling and
+  trusted deletion of invalid or orphaned Storage objects remain deferred
 
 ## Recommended next phase
 
