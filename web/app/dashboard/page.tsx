@@ -6,6 +6,8 @@ import {
   getApiIdentity,
   getApiWorkspace,
 } from "@/lib/api/client";
+import { isUuid } from "@/lib/api/types";
+import { CallUpload } from "@/components/call-upload";
 import { DashboardNav } from "@/components/dashboard-nav";
 import { createClient } from "@/lib/supabase/server";
 import { listAccessibleWorkspaces } from "@/lib/workspaces";
@@ -18,6 +20,80 @@ type DashboardApiErrorProps = {
   email: string;
   kind: Exclude<ApiErrorKind, "authentication">;
 };
+
+const CALL_STATUSES = new Set([
+  "pending_upload",
+  "uploaded",
+  "processing",
+  "completed",
+  "failed",
+]);
+
+type CallSummary = {
+  id: string;
+  originalFilename: string;
+  contentType: string | null;
+  sizeBytes: number | null;
+  status: string;
+  createdAt: string;
+  uploadCompletedAt: string | null;
+};
+
+function parseCallSummary(value: unknown): CallSummary | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return null;
+  }
+
+  const call = value as Record<string, unknown>;
+  if (
+    !isUuid(call.id) ||
+    typeof call.original_filename !== "string" ||
+    !call.original_filename.trim() ||
+    (call.content_type !== null && typeof call.content_type !== "string") ||
+    (call.size_bytes !== null &&
+      (typeof call.size_bytes !== "number" ||
+        !Number.isSafeInteger(call.size_bytes) ||
+        call.size_bytes < 1)) ||
+    typeof call.status !== "string" ||
+    !CALL_STATUSES.has(call.status) ||
+    typeof call.created_at !== "string" ||
+    Number.isNaN(Date.parse(call.created_at)) ||
+    (call.upload_completed_at !== null &&
+      (typeof call.upload_completed_at !== "string" ||
+        Number.isNaN(Date.parse(call.upload_completed_at))))
+  ) {
+    return null;
+  }
+
+  return {
+    id: call.id,
+    originalFilename: call.original_filename,
+    contentType: call.content_type,
+    sizeBytes: call.size_bytes,
+    status: call.status,
+    createdAt: call.created_at,
+    uploadCompletedAt: call.upload_completed_at,
+  };
+}
+
+function formatSize(sizeBytes: number | null) {
+  if (sizeBytes === null) return "Size unavailable";
+  const sizeMiB = sizeBytes / (1024 * 1024);
+  return sizeMiB >= 0.1
+    ? `${sizeMiB.toFixed(sizeMiB >= 10 ? 1 : 2)} MiB`
+    : `${Math.ceil(sizeBytes / 1024)} KiB`;
+}
+
+function formatDate(value: string) {
+  return new Intl.DateTimeFormat("en-AU", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(value));
+}
+
+function statusLabel(status: string) {
+  return status.replaceAll("_", " ");
+}
 
 function DashboardApiError({ email, kind }: DashboardApiErrorProps) {
   const unavailable = kind === "unavailable";
@@ -194,6 +270,28 @@ export default async function DashboardPage({
     );
   }
 
+  const { data: callRows, error: callError } = await supabase
+    .from("calls")
+    .select(
+      "id, original_filename, content_type, size_bytes, status, created_at, upload_completed_at",
+    )
+    .eq("workspace_id", activeWorkspace.id)
+    .order("created_at", { ascending: false })
+    .limit(25);
+
+  const parsedCalls = (callRows ?? []).map(parseCallSummary);
+  const callsAreValid = parsedCalls.every(
+    (call): call is CallSummary => call !== null,
+  );
+  const calls = callsAreValid ? parsedCalls : [];
+  const callListFailed = Boolean(callError) || !callsAreValid;
+
+  if (callError) {
+    console.error("Unable to load workspace calls", { code: callError.code });
+  } else if (!callsAreValid) {
+    console.error("Workspace call response was invalid");
+  }
+
   return (
     <div className="dashboard-shell">
       <DashboardNav email={user.email ?? "Signed-in user"} />
@@ -225,21 +323,57 @@ export default async function DashboardPage({
           </form>
         </section>
         <p className="lede">
-          Your workspace is ready. Call ingestion and AI analysis are not enabled
-          in this phase.
+          Securely add call recordings to this workspace. Transcription and AI
+          analysis are not enabled yet.
         </p>
-        <section className="empty-state" aria-labelledby="empty-title">
-          <div className="empty-icon" aria-hidden="true">
-            ◌
-          </div>
-          <div>
-            <h2 id="empty-title">No calls yet</h2>
-            <p>
-              Audio upload is not enabled yet. Future call data will remain
-              scoped to this workspace through database Row Level Security.
-            </p>
-          </div>
-        </section>
+        <div className="dashboard-content">
+          <CallUpload workspaceId={activeWorkspace.id} />
+          <section className="call-history" aria-labelledby="call-history-title">
+            <div className="section-heading">
+              <div>
+                <p className="eyebrow">Recent activity</p>
+                <h2 id="call-history-title">Call history</h2>
+              </div>
+              {!callListFailed && calls.length > 0 && (
+                <span className="call-count">Latest {calls.length}</span>
+              )}
+            </div>
+
+            {callListFailed ? (
+              <div className="call-list-message error" role="alert">
+                <strong>Call history could not be loaded.</strong>
+                <span>Please refresh the page and try again.</span>
+              </div>
+            ) : calls.length === 0 ? (
+              <div className="call-list-message">
+                <strong>No calls yet</strong>
+                <span>Upload the first recording for this workspace.</span>
+              </div>
+            ) : (
+              <ol className="call-list">
+                {calls.map((call) => (
+                  <li key={call.id} className="call-row">
+                    <div className="call-primary">
+                      <strong>{call.originalFilename}</strong>
+                      <span>
+                        {formatSize(call.sizeBytes)}
+                        {call.contentType ? ` · ${call.contentType}` : ""}
+                      </span>
+                    </div>
+                    <div className="call-secondary">
+                      <span className={`call-status ${call.status}`}>
+                        {statusLabel(call.status)}
+                      </span>
+                      <time dateTime={call.uploadCompletedAt ?? call.createdAt}>
+                        {formatDate(call.uploadCompletedAt ?? call.createdAt)}
+                      </time>
+                    </div>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </section>
+        </div>
       </main>
     </div>
   );

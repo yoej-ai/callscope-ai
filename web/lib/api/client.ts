@@ -3,9 +3,13 @@ import "server-only";
 import { getApiUrl } from "@/lib/api/env";
 import {
   type ApiIdentity,
+  type ApiCompletedCallUpload,
+  type ApiSignedCallUpload,
   type ApiWorkspace,
   isUuid,
+  parseApiCompletedCallUpload,
   parseApiIdentity,
+  parseApiSignedCallUpload,
   parseApiWorkspace,
 } from "@/lib/api/types";
 
@@ -40,7 +44,15 @@ function errorForStatus(status: number): ApiClientError {
   return new ApiClientError("invalid-response", status);
 }
 
-async function requestJson(path: string, accessToken: string): Promise<unknown> {
+type RequestJsonOptions =
+  | { method?: "GET"; body?: never }
+  | { method: "POST"; body: unknown };
+
+async function requestJson(
+  path: string,
+  accessToken: string,
+  options: RequestJsonOptions = {},
+): Promise<unknown> {
   if (!accessToken) {
     throw new ApiClientError("authentication");
   }
@@ -49,12 +61,16 @@ async function requestJson(path: string, accessToken: string): Promise<unknown> 
   let response: Response;
 
   try {
+    const hasBody = options.method === "POST";
     response = await fetch(requestUrl, {
       cache: "no-store",
       headers: {
         Accept: "application/json",
         Authorization: `Bearer ${accessToken}`,
+        ...(hasBody ? { "Content-Type": "application/json" } : {}),
       },
+      method: options.method ?? "GET",
+      ...(hasBody ? { body: JSON.stringify(options.body) } : {}),
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
   } catch {
@@ -106,4 +122,56 @@ export async function getApiWorkspace(
   }
 
   return workspace;
+}
+
+export async function initiateApiCallUpload(
+  accessToken: string,
+  workspaceId: string,
+  request: {
+    filename: string;
+    content_type: string;
+    size_bytes: number;
+  },
+): Promise<ApiSignedCallUpload> {
+  if (!isUuid(workspaceId)) {
+    throw new ApiClientError("invalid-response");
+  }
+
+  const upload = parseApiSignedCallUpload(
+    await requestJson(
+      `/v1/workspaces/${encodeURIComponent(workspaceId)}/calls/uploads`,
+      accessToken,
+      { method: "POST", body: request },
+    ),
+    workspaceId,
+  );
+
+  if (!upload) {
+    throw new ApiClientError("invalid-response");
+  }
+  return upload;
+}
+
+export async function completeApiCallUpload(
+  accessToken: string,
+  workspaceId: string,
+  callId: string,
+): Promise<ApiCompletedCallUpload> {
+  if (!isUuid(workspaceId) || !isUuid(callId)) {
+    throw new ApiClientError("invalid-response");
+  }
+
+  const completion = parseApiCompletedCallUpload(
+    await requestJson(
+      `/v1/workspaces/${encodeURIComponent(workspaceId)}/calls/${encodeURIComponent(callId)}/complete`,
+      accessToken,
+      { method: "POST", body: {} },
+    ),
+    callId,
+  );
+
+  if (!completion) {
+    throw new ApiClientError("invalid-response");
+  }
+  return completion;
 }
