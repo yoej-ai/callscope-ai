@@ -9,6 +9,7 @@ import jwt
 from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from fastapi.testclient import TestClient
 
+from app.audio_uploads import SupabaseAudioUploadClient
 from app.auth import JwksCache, SupabaseJwtVerifier
 from app.config import Settings
 from app.main import create_app
@@ -79,6 +80,7 @@ def build_test_client(
     *,
     jwks_handler: Callable[[httpx.Request], httpx.Response] | None = None,
     workspace_handler: Callable[[httpx.Request], httpx.Response] | None = None,
+    upload_handler: Callable[[httpx.Request], httpx.Response] | None = None,
 ) -> TestClient:
     settings = Settings(
         supabase_url=TEST_SUPABASE_URL,
@@ -93,6 +95,9 @@ def build_test_client(
     def default_workspace_handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=[])
 
+    def default_upload_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, json={"message": "unexpected upload request"})
+
     jwks_cache = JwksCache(
         settings.supabase_jwks_url,
         transport=httpx.MockTransport(jwks_handler or default_jwks_handler),
@@ -102,11 +107,16 @@ def build_test_client(
         settings,
         transport=httpx.MockTransport(workspace_handler or default_workspace_handler),
     )
+    audio_upload_client = SupabaseAudioUploadClient(
+        settings,
+        transport=httpx.MockTransport(upload_handler or default_upload_handler),
+    )
     return TestClient(
         create_app(
             settings=settings,
             jwt_verifier=verifier,
             workspace_client=workspace_client,
+            audio_upload_client=audio_upload_client,
         )
     )
 

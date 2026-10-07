@@ -4,9 +4,9 @@ CallScope AI is a multi-user call-intelligence SaaS foundation for sales and
 support teams. It is designed to turn customer conversations into secure,
 searchable summaries, intent, sentiment, objections, scores, and action items.
 
-This repository currently contains the production-oriented V1 foundation. It
-does **not** yet upload audio, transcribe calls, invoke LLMs, or integrate with
-billing and CRM systems.
+This repository currently contains the production-oriented V1 foundation and a
+private, tenant-authorized audio-ingestion boundary. It does **not** yet
+transcribe calls, invoke LLMs, or integrate with billing and CRM systems.
 
 ## Foundation scope
 
@@ -20,6 +20,7 @@ billing and CRM systems.
 - FastAPI service with typed configuration, logging, CORS, errors, and `/health`
 - JWKS-verified Supabase user authentication for protected API routes
 - RLS-scoped workspace lookup through the user-authenticated Supabase Data API
+- Private Supabase Storage uploads initiated and finalized through FastAPI
 - Frontend, backend, and database-security CI jobs
 
 ## Architecture
@@ -192,12 +193,38 @@ Available endpoints:
 - `GET /v1/me` — returns only the verified user UUID and safe role
 - `GET /v1/workspaces/{workspace_id}` — returns the requested workspace only when
   it is visible through the verified user's existing RLS policies
+- `POST /v1/workspaces/{workspace_id}/calls/uploads` — creates a pending call and
+  returns a short-lived signed upload target for its database-generated path
+- `POST /v1/workspaces/{workspace_id}/calls/{call_id}/complete` — verifies the
+  exact stored object's metadata and moves the call to `uploaded`
 
 Workspace lookup sends the configured publishable key in `apikey` and the
 verified user access token in `Authorization`. It queries only the requested UUID
 and selects only `id`, `name`, and `created_at`. A missing workspace and a
 workspace hidden by another tenant's RLS policy both return the same generic 404;
 the API performs no privileged existence check.
+
+### Private audio ingestion
+
+Audio is stored in the private `call-audio` bucket. The database, not a browser,
+creates every object path as
+`{workspace_id}/{call_id}/source.{validated_extension}`. Upload authorization is
+tied to the authenticated user, workspace membership, the pending call row, and
+that exact path. FastAPI uses the user's bearer token plus the publishable key to
+create the pending row and request a signed upload token; it does not use a
+secret or service-role credential.
+
+Accepted files are MP3, MP4 audio, M4A, WAV, WebM audio, and Ogg audio, with a
+maximum declared size of 25 MiB. Filename extension, MIME type, and size must all
+pass both API and database validation. Completion is a separate, idempotent step
+that checks the exact Storage object and its recorded size and MIME type before
+marking the call `uploaded`. Browser clients receive no general object update,
+delete, or listing capability.
+
+This phase establishes ingestion only: it does not inspect file bytes or run
+transcription. A later trusted worker must verify the actual media bytes before
+decoding or processing them. Local validation uses the free local Supabase stack
+and does not require hosted database changes or paid services.
 
 ## Database overview
 
@@ -323,12 +350,12 @@ at release `v3.0.1` and pins Supabase CLI `2.119.0` rather than floating on late
 - JWKS and workspace reads require the configured Supabase service to be reachable
 - call and analysis mutation is reserved for future trusted workflows
 - raw usage events have no browser access; no aggregate usage API exists yet
-- there is no audio storage, upload, transcription, LLM, vector, billing, or CRM code
+- private audio ingestion is available, but there is no upload UI, byte-level
+  media validation, transcription, LLM, vector, billing, or CRM code
 
 ## Recommended next phase
 
-Validate the authenticated frontend-to-API flow with a real signed-in test user.
-Only after that validation should the project design Supabase Storage policies and
-an audio-upload state machine. Audio upload, Storage, transcription, and analysis
-are not implemented yet.
+Validate the private upload flow with a real signed-in test user in a non-production
+environment. The next trusted processing phase should validate actual media bytes
+before adding transcription; transcription and analysis are not implemented yet.
 
