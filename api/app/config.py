@@ -82,6 +82,12 @@ class Settings(BaseSettings):
             raise RuntimeError("SUPABASE_URL is required for protected API routes")
         return f"{self.supabase_url}/rest/v1"
 
+    @property
+    def supabase_storage_url(self) -> str:
+        if self.supabase_url is None:
+            raise RuntimeError("SUPABASE_URL is required for protected API routes")
+        return f"{self.supabase_url}/storage/v1"
+
     def require_publishable_key(self) -> str:
         if self.supabase_publishable_key is None:
             raise RuntimeError(
