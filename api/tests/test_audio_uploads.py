@@ -21,6 +21,7 @@ CALL_ID = UUID("6e82a7b5-a82a-4b95-9fd0-cfc7619c85a8")
 STORAGE_PATH = f"{WORKSPACE_ID}/{CALL_ID}/source.mp3"
 INITIATE_PATH = f"/v1/workspaces/{WORKSPACE_ID}/calls/uploads"
 COMPLETE_PATH = f"/v1/workspaces/{WORKSPACE_ID}/calls/{CALL_ID}/complete"
+RECONCILE_PATH = f"/v1/workspaces/{WORKSPACE_ID}/calls/uploads/reconcile"
 VALID_REQUEST = {
     "filename": "customer-call.mp3",
     "content_type": "audio/mpeg",
@@ -335,6 +336,142 @@ def test_complete_maps_supabase_auth_rejection_safely() -> None:
 
     response = build_test_client(key, upload_handler=upload_handler).post(
         COMPLETE_PATH,
+        headers=bearer(token),
+    )
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "The user session was rejected."}
+    assert "private auth detail" not in response.text
+    assert_secret_not_exposed(response.text, token)
+
+
+def test_reconcile_uploads_requires_authentication() -> None:
+    response = build_test_client(SigningKey()).post(RECONCILE_PATH)
+
+    assert response.status_code == 401
+
+
+def test_reconcile_uploads_parses_bounded_results_and_counts_outcomes() -> None:
+    key = SigningKey()
+    token = key.token()
+    deleted_call = UUID("7e82a7b5-a82a-4b95-9fd0-cfc7619c85a8")
+    failed_call = UUID("8e82a7b5-a82a-4b95-9fd0-cfc7619c85a8")
+
+    def upload_handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            assert dict(request.url.params.multi_items()) == {
+                "id": f"eq.{WORKSPACE_ID}",
+                "select": "id",
+                "limit": "1",
+            }
+            return httpx.Response(200, json=[{"id": str(WORKSPACE_ID)}])
+        assert request.url.path.endswith("/rpc/reconcile_stale_call_uploads")
+        assert json.loads(request.content) == {
+            "p_workspace_id": str(WORKSPACE_ID),
+            "p_limit": 20,
+        }
+        assert_secret_equal(request.headers["authorization"], f"Bearer {token}")
+        return httpx.Response(
+            200,
+            json=[
+                {"call_id": str(CALL_ID), "outcome": "uploaded"},
+                {"call_id": str(deleted_call), "outcome": "deleted"},
+                {"call_id": str(failed_call), "outcome": "failed"},
+            ],
+        )
+
+    response = build_test_client(key, upload_handler=upload_handler).post(
+        RECONCILE_PATH,
+        headers=bearer(token),
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "processed": 3,
+        "uploaded": 1,
+        "deleted": 1,
+        "failed": 1,
+        "results": [
+            {"call_id": str(CALL_ID), "outcome": "uploaded"},
+            {"call_id": str(deleted_call), "outcome": "deleted"},
+            {"call_id": str(failed_call), "outcome": "failed"},
+        ],
+    }
+    assert_secret_not_exposed(response.text, token)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"call_id": str(CALL_ID), "outcome": "uploaded"},
+        [{"call_id": str(CALL_ID), "outcome": "invalid"}],
+        [
+            {"call_id": str(CALL_ID), "outcome": "uploaded"},
+            {"call_id": str(CALL_ID), "outcome": "uploaded"},
+        ],
+    ],
+)
+def test_reconcile_uploads_rejects_malformed_upstream_response(payload: object) -> None:
+    key = SigningKey()
+
+    def upload_handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json=[{"id": str(WORKSPACE_ID)}])
+        return httpx.Response(200, json=payload)
+
+    response = build_test_client(key, upload_handler=upload_handler).post(
+        RECONCILE_PATH,
+        headers=bearer(key.token()),
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Upload service is unavailable."}
+
+
+def test_reconcile_uploads_maps_upstream_failures_without_body_leakage() -> None:
+    key = SigningKey()
+    token = key.token()
+
+    def upload_handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json=[{"id": str(WORKSPACE_ID)}])
+        return httpx.Response(500, json={"message": "private reconciliation detail"})
+
+    response = build_test_client(key, upload_handler=upload_handler).post(
+        RECONCILE_PATH,
+        headers=bearer(token),
+    )
+
+    assert response.status_code == 503
+    assert "private reconciliation detail" not in response.text
+    assert_secret_not_exposed(response.text, token)
+
+
+def test_reconcile_hidden_workspace_is_generic_not_found() -> None:
+    key = SigningKey()
+
+    def upload_handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        return httpx.Response(200, json=[])
+
+    response = build_test_client(key, upload_handler=upload_handler).post(
+        RECONCILE_PATH,
+        headers=bearer(key.token()),
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Workspace not found."}
+
+
+def test_reconcile_maps_supabase_auth_rejection_safely() -> None:
+    key = SigningKey()
+    token = key.token()
+
+    def upload_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"message": "private auth detail"})
+
+    response = build_test_client(key, upload_handler=upload_handler).post(
+        RECONCILE_PATH,
         headers=bearer(token),
     )
 

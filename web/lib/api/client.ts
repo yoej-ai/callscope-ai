@@ -4,11 +4,13 @@ import { getApiUrl } from "@/lib/api/env";
 import {
   type ApiIdentity,
   type ApiCompletedCallUpload,
+  type ApiReconciliationResult,
   type ApiSignedCallUpload,
   type ApiWorkspace,
   isUuid,
   parseApiCompletedCallUpload,
   parseApiIdentity,
+  parseApiReconciliationResult,
   parseApiSignedCallUpload,
   parseApiWorkspace,
 } from "@/lib/api/types";
@@ -174,4 +176,26 @@ export async function completeApiCallUpload(
     throw new ApiClientError("invalid-response");
   }
   return completion;
+}
+
+export async function reconcileApiCallUploads(
+  accessToken: string,
+  workspaceId: string,
+): Promise<ApiReconciliationResult> {
+  if (!isUuid(workspaceId)) {
+    throw new ApiClientError("invalid-response");
+  }
+
+  const reconciliation = parseApiReconciliationResult(
+    await requestJson(
+      `/v1/workspaces/${encodeURIComponent(workspaceId)}/calls/uploads/reconcile`,
+      accessToken,
+      { method: "POST", body: {} },
+    ),
+  );
+
+  if (!reconciliation) {
+    throw new ApiClientError("invalid-response");
+  }
+  return reconciliation;
 }

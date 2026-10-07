@@ -134,6 +134,7 @@ export function CallUpload({ workspaceId }: CallUploadProps) {
       return;
     }
 
+    let pendingCallCreated = false;
     let storageUploaded = false;
     working.current = true;
     try {
@@ -172,6 +173,7 @@ export function CallUpload({ workspaceId }: CallUploadProps) {
           "Could not prepare the secure upload. Please try again.",
         );
       }
+      pendingCallCreated = true;
 
       setStage("uploading");
       setMessage(STAGE_MESSAGE.uploading);
@@ -189,7 +191,7 @@ export function CallUpload({ workspaceId }: CallUploadProps) {
 
       if (storageError || storedObject?.path !== upload.path) {
         throw new UploadFlowError(
-          "Upload failed. Please choose the file and try again.",
+          "The upload could not be confirmed. Check call history and retry verification.",
         );
       }
       storageUploaded = true;
@@ -228,13 +230,16 @@ export function CallUpload({ workspaceId }: CallUploadProps) {
       setMessage(STAGE_MESSAGE.complete);
       router.refresh();
     } catch (error) {
+      if (pendingCallCreated) router.refresh();
       setStage("error");
       setMessage(
         error instanceof UploadFlowError
           ? error.message
           : storageUploaded
-            ? "The recording uploaded, but it could not be verified. Please refresh and try again later."
-            : "Upload failed. Please choose the file and try again.",
+            ? "The recording reached storage, but verification did not complete. Check call history and retry verification."
+            : pendingCallCreated
+              ? "The upload could not be confirmed. Check call history and retry verification."
+              : "Upload failed. Please choose the file and try again.",
       );
     } finally {
       working.current = false;

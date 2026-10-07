@@ -176,6 +176,7 @@ h1, h2, h3, p { margin-top: 0; }
 .status-pulse { animation: pulse 1s ease-in-out infinite alternate; background: var(--forest); border-radius: 50%; flex: 0 0 9px; height: 9px; width: 9px; }
 @keyframes pulse { from { opacity: .35; } to { opacity: 1; } }
 .section-heading { align-items: center; display: flex; gap: 18px; justify-content: space-between; }
+.history-actions { align-items: flex-end; display: flex; flex-direction: column; gap: 8px; }
 .call-count { background: var(--paper); border-radius: 999px; color: var(--muted); font-size: .78rem; font-weight: 700; padding: 7px 11px; white-space: nowrap; }
 .call-list { display: grid; list-style: none; margin: 20px 0 0; padding: 0; }
 .call-row { align-items: center; border-top: 1px solid var(--line); display: flex; gap: 22px; justify-content: space-between; min-width: 0; padding: 18px 0; }
@@ -190,6 +191,9 @@ h1, h2, h3, p { margin-top: 0; }
 .call-list-message { border-top: 1px solid var(--line); display: grid; gap: 6px; margin-top: 20px; padding: 24px 0 4px; }
 .call-list-message span { color: var(--muted); }
 .call-list-message.error strong { color: #8f2f19; }
+.recovery-action, .stale-recovery { align-items: flex-end; display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.recovery-button { font-size: .78rem; min-height: 34px; padding: 0 12px; }
+.recovery-message { color: var(--muted); font-size: .72rem; line-height: 1.35; max-width: 230px; }
 
 .onboarding-main { align-items: center; display: flex; justify-content: center; min-height: calc(100vh - 94px); padding: 48px 28px; }
 .onboarding-card { background: var(--surface); border: 1px solid var(--line); border-radius: 28px; box-shadow: var(--shadow); max-width: 560px; padding: clamp(30px, 6vw, 58px); width: 100%; }
@@ -224,6 +228,7 @@ h1, h2, h3, p { margin-top: 0; }
   .dashboard-main { padding: 64px 20px; }
   .call-row { align-items: flex-start; flex-direction: column; gap: 12px; }
   .call-secondary { text-align: left; }
+  .history-actions, .recovery-action, .stale-recovery { align-items: flex-start; }
 }
 
 @media (prefers-reduced-motion: reduce) {

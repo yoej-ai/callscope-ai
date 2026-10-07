@@ -24,6 +24,19 @@ export type ApiCompletedCallUpload = {
   status: "uploaded";
 };
 
+export type ApiReconciliationOutcome = "deleted" | "uploaded" | "failed";
+
+export type ApiReconciliationResult = {
+  processed: number;
+  uploaded: number;
+  deleted: number;
+  failed: number;
+  results: Array<{
+    call_id: string;
+    outcome: ApiReconciliationOutcome;
+  }>;
+};
+
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -133,4 +146,73 @@ export function parseApiCompletedCallUpload(
   }
 
   return { call_id: value.call_id, status: value.status };
+}
+
+export function parseApiReconciliationResult(
+  value: unknown,
+): ApiReconciliationResult | null {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, [
+      "deleted",
+      "failed",
+      "processed",
+      "results",
+      "uploaded",
+    ]) ||
+    !Number.isSafeInteger(value.processed) ||
+    !Number.isSafeInteger(value.uploaded) ||
+    !Number.isSafeInteger(value.deleted) ||
+    !Number.isSafeInteger(value.failed) ||
+    (value.processed as number) < 0 ||
+    (value.processed as number) > 20 ||
+    (value.uploaded as number) < 0 ||
+    (value.deleted as number) < 0 ||
+    (value.failed as number) < 0 ||
+    !Array.isArray(value.results) ||
+    value.results.length !== value.processed
+  ) {
+    return null;
+  }
+
+  const results: ApiReconciliationResult["results"] = [];
+  const callIds = new Set<string>();
+  for (const item of value.results) {
+    if (
+      !isRecord(item) ||
+      !hasExactKeys(item, ["call_id", "outcome"]) ||
+      !isUuid(item.call_id) ||
+      !["deleted", "uploaded", "failed"].includes(
+        typeof item.outcome === "string" ? item.outcome : "",
+      ) ||
+      callIds.has(item.call_id)
+    ) {
+      return null;
+    }
+    callIds.add(item.call_id);
+    results.push({
+      call_id: item.call_id,
+      outcome: item.outcome as ApiReconciliationOutcome,
+    });
+  }
+
+  const uploaded = results.filter((item) => item.outcome === "uploaded").length;
+  const deleted = results.filter((item) => item.outcome === "deleted").length;
+  const failed = results.filter((item) => item.outcome === "failed").length;
+  if (
+    value.uploaded !== uploaded ||
+    value.deleted !== deleted ||
+    value.failed !== failed ||
+    uploaded + deleted + failed !== value.processed
+  ) {
+    return null;
+  }
+
+  return {
+    processed: value.processed as number,
+    uploaded,
+    deleted,
+    failed,
+    results,
+  };
 }

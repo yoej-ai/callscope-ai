@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import parse_qs, quote, urlsplit
 from uuid import UUID
 
@@ -15,6 +15,7 @@ from app.supabase_data import (
 AUDIO_BUCKET = "call-audio"
 MAX_AUDIO_SIZE_BYTES = 26_214_400
 SIGNED_UPLOAD_EXPIRES_SECONDS = 7_200
+RECONCILIATION_BATCH_LIMIT = 20
 CONTENT_TYPE_BY_EXTENSION = {
     ".mp3": "audio/mpeg",
     ".mp4": "audio/mp4",
@@ -95,6 +96,21 @@ class SignedCallUpload(BaseModel):
 class FinalizedCallUpload(BaseModel):
     call_id: UUID
     status: str
+
+
+class ReconciledCallUpload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    call_id: UUID
+    outcome: Literal["deleted", "uploaded", "failed"]
+
+
+class UploadReconciliationResult(BaseModel):
+    processed: int = Field(ge=0, le=RECONCILIATION_BATCH_LIMIT)
+    uploaded: int = Field(ge=0, le=RECONCILIATION_BATCH_LIMIT)
+    deleted: int = Field(ge=0, le=RECONCILIATION_BATCH_LIMIT)
+    failed: int = Field(ge=0, le=RECONCILIATION_BATCH_LIMIT)
+    results: list[ReconciledCallUpload]
 
 
 def audio_extension(filename: str) -> str:
@@ -211,6 +227,92 @@ class SupabaseAudioUploadClient:
             return finalized
         except (ValueError, TypeError, ValidationError, IndexError) as exc:
             raise SupabaseDataUnavailable from exc
+
+    async def reconcile_uploads(
+        self,
+        *,
+        workspace_id: UUID,
+        current_user: CurrentUser,
+    ) -> UploadReconciliationResult | None:
+        rest_url, _, headers = self._connection(current_user)
+        try:
+            async with httpx.AsyncClient(
+                timeout=self._timeout,
+                transport=self._transport,
+            ) as client:
+                if not await self._workspace_is_visible(
+                    client,
+                    rest_url=rest_url,
+                    headers=headers,
+                    workspace_id=workspace_id,
+                ):
+                    return None
+                response = await client.post(
+                    f"{rest_url}/rpc/reconcile_stale_call_uploads",
+                    headers=headers,
+                    json={
+                        "p_workspace_id": str(workspace_id),
+                        "p_limit": RECONCILIATION_BATCH_LIMIT,
+                    },
+                )
+        except httpx.HTTPError as exc:
+            raise SupabaseDataUnavailable from exc
+
+        self._raise_for_upstream_status(response)
+        try:
+            payload: Any = response.json()
+            if not isinstance(payload, list) or len(payload) > RECONCILIATION_BATCH_LIMIT:
+                raise SupabaseDataUnavailable
+            results = [ReconciledCallUpload.model_validate(item) for item in payload]
+            if len({item.call_id for item in results}) != len(results):
+                raise SupabaseDataUnavailable
+        except (ValueError, TypeError, ValidationError) as exc:
+            raise SupabaseDataUnavailable from exc
+
+        return UploadReconciliationResult(
+            processed=len(results),
+            uploaded=sum(item.outcome == "uploaded" for item in results),
+            deleted=sum(item.outcome == "deleted" for item in results),
+            failed=sum(item.outcome == "failed" for item in results),
+            results=results,
+        )
+
+    async def _workspace_is_visible(
+        self,
+        client: httpx.AsyncClient,
+        *,
+        rest_url: str,
+        headers: dict[str, str],
+        workspace_id: UUID,
+    ) -> bool:
+        response = await client.get(
+            f"{rest_url}/workspaces",
+            headers=headers,
+            params={
+                "id": f"eq.{workspace_id}",
+                "select": "id",
+                "limit": "1",
+            },
+        )
+        self._raise_for_upstream_status(response)
+
+        try:
+            payload: Any = response.json()
+            if not isinstance(payload, list):
+                raise SupabaseDataUnavailable
+            if not payload:
+                return False
+            if (
+                len(payload) != 1
+                or not isinstance(payload[0], dict)
+                or set(payload[0]) != {"id"}
+                or not isinstance(payload[0]["id"], str)
+                or UUID(payload[0]["id"]) != workspace_id
+            ):
+                raise SupabaseDataUnavailable
+        except (ValueError, TypeError) as exc:
+            raise SupabaseDataUnavailable from exc
+        return True
 
     def _connection(
         self,
