@@ -328,8 +328,8 @@ export default async function DashboardPage({
           </form>
         </section>
         <p className="lede">
-          Securely add call recordings to this workspace. A transcription worker
-          and AI analysis are not enabled yet.
+          Securely upload and transcribe call recordings. AI analysis is the next
+          capability and is not processing calls yet.
         </p>
         <div className="dashboard-content">
           <CallUpload workspaceId={activeWorkspace.id} />
