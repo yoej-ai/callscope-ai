@@ -4,9 +4,10 @@ CallScope AI is a multi-user call-intelligence SaaS foundation for sales and
 support teams. It is designed to turn customer conversations into secure,
 searchable summaries, intent, sentiment, objections, scores, and action items.
 
-This repository currently contains the production-oriented V1 foundation and a
-private, tenant-authorized audio-ingestion boundary. It does **not** yet
-transcribe calls, invoke LLMs, or integrate with billing and CRM systems.
+This repository currently contains the production-oriented V1 foundation,
+private tenant-authorized audio ingestion, and the secure database/UI foundation
+for a future transcription worker. It does **not** yet transcribe calls, invoke
+LLMs, or integrate with billing and CRM systems.
 
 ## Foundation scope
 
@@ -22,6 +23,8 @@ transcribe calls, invoke LLMs, or integrate with billing and CRM systems.
 - RLS-scoped workspace lookup through the user-authenticated Supabase Data API
 - Private Supabase Storage uploads initiated and finalized through FastAPI
 - User-triggered recovery for interrupted and stale pending uploads
+- RLS-protected transcript state and worker-only claim/lease/retry RPCs
+- Tenant-safe server-rendered call detail and transcript views
 - Frontend, backend, and database-security CI jobs
 
 ## Architecture
@@ -78,8 +81,8 @@ npm run dev
 ```
 
 Open `http://localhost:3000`. Available routes include `/`, `/sign-up`,
-`/sign-in`, `/auth/callback`, and the protected `/onboarding` and `/dashboard`
-routes.
+`/sign-in`, `/auth/callback`, the protected `/onboarding` and `/dashboard`
+routes, and tenant-protected call details at `/dashboard/calls/{call_id}`.
 
 Frontend environment variables:
 
@@ -253,10 +256,41 @@ but does not simulate two truly concurrent database sessions. Production
 reconciliation therefore keeps the conservative age threshold and skip-locked
 row processing as defense in depth.
 
-This phase establishes ingestion only: it does not inspect file bytes or run
-transcription. A later trusted worker must verify the actual media bytes before
-decoding or processing them. Local validation uses the free local Supabase stack
-and does not require hosted database changes or paid services.
+Ingestion still does not inspect file bytes. A later trusted worker must verify
+the actual media bytes before decoding or processing them. Local validation uses
+the free local Supabase stack and does not require paid services.
+
+### Secure transcription foundation
+
+Every call that reaches `uploaded` with its exact trusted `call-audio` path,
+content type, size, and completion timestamp receives one queued
+`call_transcriptions` row. A trigger handles new finalizations with
+`ON CONFLICT DO NOTHING`; the forward migration applies the same strict predicate
+when backfilling existing uploaded calls. Pending, failed, and incomplete legacy
+rows are not queued.
+
+The transcription lifecycle is separate from `calls.status`: `queued`,
+`processing`, `completed`, and `failed` live only on `call_transcriptions`.
+Authenticated workspace members can select safe transcript fields through RLS,
+while claim tokens, leases, retry timing, attempt counts, and internal error codes
+have no browser-readable grants. The call-detail page queries only safe columns
+and displays a generic failed state rather than worker diagnostics.
+
+Four `SECURITY DEFINER` RPCs form the future trusted-worker boundary. Only the
+Supabase `service_role` database role can execute them; anonymous and
+authenticated roles cannot, and the browser never receives service-role
+credentials. The existing FastAPI user service has no service-role configuration.
+Claims are oldest-first, limited to five, protected by `FOR UPDATE SKIP LOCKED`,
+and use fixed fifteen-minute leases with fresh claim tokens. A matching active
+token can renew, complete, or report failure. Completion retains the hidden token
+so a same-token retry after response loss is idempotent. Retryable failures wait
+five minutes and stop after three claims; only bounded machine-readable error
+codes are stored.
+
+Phase 3A provides this state machine and UI only. It does **not** install or run a
+transcription engine, decode audio, download private recordings, or create signed
+browser download URLs. Phase 3B can connect a free/local isolated worker and keep
+all service-role credentials outside the browser and existing user-facing API.
 
 ## Database overview
 
@@ -266,6 +300,7 @@ The migration creates:
 - `workspaces`: tenant records with the original creator recorded
 - `workspace_members`: unique user membership with `owner`, `admin`, or `member`
 - `calls`: workspace-scoped call metadata and processing state
+- `call_transcriptions`: one RLS-protected transcript state/result per eligible call
 - `call_analyses`: one structured analysis record per call
 - `usage_events`: append-only usage/telemetry records for later metering
 
@@ -301,6 +336,9 @@ RLS rules enforce the following model:
 - members cannot add users, change roles, or remove users
 - owners cannot demote themselves through the browser policy
 - workspace members can read calls and analyses for their tenant
+- workspace members can read only safe transcript columns for their tenant
+- browser roles cannot mutate transcription jobs or read worker claim/lease fields
+- worker job RPC execution is reserved exclusively for `service_role`
 - raw `usage_events` rows have no anonymous or authenticated browser privileges
 - future usage reporting must use a narrowly scoped aggregate RPC or trusted API
 - anonymous users have no application-table privileges
@@ -382,14 +420,18 @@ at release `v3.0.1` and pins Supabase CLI `2.119.0` rather than floating on late
 - JWKS and workspace reads require the configured Supabase service to be reachable
 - analysis mutation is reserved for future trusted workflows
 - raw usage events have no browser access; no aggregate usage API exists yet
-- private audio ingestion and workspace call history are available, but there is
-  no byte-level media validation, transcription, LLM, vector, billing, or CRM code
+- private audio ingestion, call history, and the transcription state/UI foundation
+  are available, but there is no byte-level media validation, transcription
+  engine, LLM, vector, billing, or CRM code
 - stale reconciliation is user-triggered and bounded; automatic scheduling and
   trusted deletion of invalid or orphaned Storage objects remain deferred
+- transcription claims are database-backed and worker-triggered; no worker runtime,
+  scheduler, audio decoder, model, diarization, or provider integration exists yet
 
 ## Recommended next phase
 
-Validate the private upload flow with a real signed-in test user in a non-production
-environment. The next trusted processing phase should validate actual media bytes
-before adding transcription; transcription and analysis are not implemented yet.
+Phase 3B should add an isolated free/local worker that validates and decodes media
+bytes, retrieves private recordings through a trusted server-side mechanism, and
+uses the service-role-only claim/lease/result RPCs. Actual transcription and all
+analysis remain unimplemented.
 
