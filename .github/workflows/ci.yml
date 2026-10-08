@@ -47,6 +47,26 @@ jobs:
       - run: python -m pip install -e ".[dev]"
       - run: pytest
 
+  worker:
+    name: Worker
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: worker
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: worker/pyproject.toml
+      - run: python -m pip install -e ".[speech,dev]"
+      - run: python -m pip check
+      - name: Verify PyAV compatibility ceiling
+        run: python -c "import av; print(av.__version__); assert int(av.__version__.split('.')[0]) < 19"
+      - run: python -m pytest
+      - run: python -m compileall callscope_worker
+
   database:
     name: Database security
     runs-on: ubuntu-latest
