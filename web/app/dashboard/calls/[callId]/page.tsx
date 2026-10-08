@@ -22,6 +22,13 @@ const TRANSCRIPTION_STATUSES = new Set([
   "completed",
   "failed",
 ]);
+const ANALYSIS_STATUSES = new Set([
+  "queued",
+  "processing",
+  "completed",
+  "failed",
+]);
+const SENTIMENTS = new Set(["positive", "neutral", "negative", "mixed"]);
 
 type CallDetail = {
   id: string;
@@ -37,6 +44,19 @@ type TranscriptionDetail = {
   status: "queued" | "processing" | "completed" | "failed";
   transcriptText: string | null;
   languageCode: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+};
+
+type AnalysisDetail = {
+  status: "queued" | "processing" | "completed" | "failed";
+  summary: string | null;
+  sentiment: "positive" | "neutral" | "negative" | "mixed" | null;
+  primaryIntent: string | null;
+  objections: string[];
+  actionItems: string[];
+  topics: string[];
+  overallScore: number | null;
   startedAt: string | null;
   completedAt: string | null;
 };
@@ -114,6 +134,100 @@ function parseTranscriptionDetail(value: unknown): TranscriptionDetail | null {
   };
 }
 
+function parseStringArray(
+  value: unknown,
+  maximumElements: number,
+  maximumItemCharacters: number,
+) {
+  if (
+    !Array.isArray(value) ||
+    value.length > maximumElements ||
+    value.some(
+      (item) =>
+        typeof item !== "string" ||
+        !item.trim() ||
+        item.length > maximumItemCharacters,
+    )
+  ) {
+    return null;
+  }
+
+  return value as string[];
+}
+
+function parseAnalysisDetail(value: unknown): AnalysisDetail | null {
+  if (!isRecord(value)) return null;
+
+  const objections = parseStringArray(value.objections, 25, 1000);
+  const actionItems = parseStringArray(value.action_items, 50, 1000);
+  const topics = parseStringArray(value.topics, 50, 200);
+
+  if (
+    typeof value.status !== "string" ||
+    !ANALYSIS_STATUSES.has(value.status) ||
+    (value.summary !== null && typeof value.summary !== "string") ||
+    (value.sentiment !== null &&
+      (typeof value.sentiment !== "string" ||
+        !SENTIMENTS.has(value.sentiment))) ||
+    (value.primary_intent !== null &&
+      typeof value.primary_intent !== "string") ||
+    objections === null ||
+    actionItems === null ||
+    topics === null ||
+    (value.overall_score !== null &&
+      (typeof value.overall_score !== "number" ||
+        !Number.isSafeInteger(value.overall_score) ||
+        value.overall_score < 0 ||
+        value.overall_score > 100)) ||
+    (value.started_at !== null && !isTimestamp(value.started_at)) ||
+    (value.completed_at !== null && !isTimestamp(value.completed_at))
+  ) {
+    return null;
+  }
+
+  if (
+    value.status === "completed" &&
+    (typeof value.summary !== "string" ||
+      !value.summary.trim() ||
+      value.summary.length > 10000 ||
+      typeof value.primary_intent !== "string" ||
+      !value.primary_intent.trim() ||
+      value.primary_intent.length > 500 ||
+      typeof value.sentiment !== "string" ||
+      !SENTIMENTS.has(value.sentiment) ||
+      !isTimestamp(value.completed_at))
+  ) {
+    return null;
+  }
+
+  if (
+    value.status !== "completed" &&
+    (value.summary !== null ||
+      value.sentiment !== null ||
+      value.primary_intent !== null ||
+      objections.length > 0 ||
+      actionItems.length > 0 ||
+      topics.length > 0 ||
+      value.overall_score !== null ||
+      value.completed_at !== null)
+  ) {
+    return null;
+  }
+
+  return {
+    status: value.status as AnalysisDetail["status"],
+    summary: value.summary,
+    sentiment: value.sentiment as AnalysisDetail["sentiment"],
+    primaryIntent: value.primary_intent,
+    objections,
+    actionItems,
+    topics,
+    overallScore: value.overall_score,
+    startedAt: value.started_at,
+    completedAt: value.completed_at,
+  };
+}
+
 function formatDate(value: string) {
   return new Intl.DateTimeFormat("en-AU", {
     dateStyle: "medium",
@@ -161,7 +275,7 @@ function TranscriptionPanel({
     return (
       <div className="transcript-state">
         <h2>Queued for transcription</h2>
-        <p>A trusted worker can process this recording in a later phase.</p>
+        <p>A trusted local worker can process this recording while it is running.</p>
       </div>
     );
   }
@@ -199,6 +313,137 @@ function TranscriptionPanel({
       {transcription.completedAt && (
         <p className="transcript-timestamp">
           Completed {formatDate(transcription.completedAt)}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function InsightList({
+  items,
+  emptyLabel,
+}: {
+  items: string[];
+  emptyLabel: string;
+}) {
+  if (items.length === 0) {
+    return <p className="insight-empty">{emptyLabel}</p>;
+  }
+
+  return (
+    <ul className="insight-list">
+      {items.map((item, index) => (
+        <li key={`${index}-${item}`}>{item}</li>
+      ))}
+    </ul>
+  );
+}
+
+function AnalysisPanel({
+  analysis,
+  unavailable,
+}: {
+  analysis: AnalysisDetail | null;
+  unavailable: boolean;
+}) {
+  if (unavailable) {
+    return (
+      <div className="insights-state" role="alert">
+        <p className="eyebrow">AI Insights</p>
+        <h2>Insights unavailable</h2>
+        <p>We could not securely load the analysis state. Try again later.</p>
+      </div>
+    );
+  }
+
+  if (!analysis) {
+    return (
+      <div className="insights-state">
+        <p className="eyebrow">AI Insights</p>
+        <h2>Analysis not queued</h2>
+        <p>Analysis waits for a valid completed transcript.</p>
+      </div>
+    );
+  }
+
+  if (analysis.status === "queued") {
+    return (
+      <div className="insights-state">
+        <p className="eyebrow">AI Insights</p>
+        <h2>Queued for analysis</h2>
+        <p>The secure analysis foundation is ready for a future trusted worker.</p>
+      </div>
+    );
+  }
+
+  if (analysis.status === "processing") {
+    return (
+      <div className="insights-state" aria-live="polite">
+        <p className="eyebrow">AI Insights</p>
+        <h2>Analysis in progress</h2>
+        <p>A trusted analysis worker currently holds this job.</p>
+      </div>
+    );
+  }
+
+  if (analysis.status === "failed") {
+    return (
+      <div className="insights-state" role="status">
+        <p className="eyebrow">AI Insights</p>
+        <h2>Analysis failed</h2>
+        <p>The call could not be analysed. Internal worker details remain private.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="insights-result">
+      <div className="section-heading insights-heading">
+        <div>
+          <p className="eyebrow">AI Insights</p>
+          <h2>Completed analysis</h2>
+        </div>
+        {analysis.overallScore !== null && (
+          <span className="insight-score" aria-label={`Overall score ${analysis.overallScore} out of 100`}>
+            {analysis.overallScore}/100
+          </span>
+        )}
+      </div>
+
+      <div className="insight-summary">
+        <h3>Summary</h3>
+        <p>{analysis.summary}</p>
+      </div>
+
+      <dl className="insight-facts">
+        <div>
+          <dt>Sentiment</dt>
+          <dd>{analysis.sentiment}</dd>
+        </div>
+        <div>
+          <dt>Primary intent</dt>
+          <dd>{analysis.primaryIntent}</dd>
+        </div>
+      </dl>
+
+      <div className="insight-grid">
+        <section aria-labelledby="insight-objections">
+          <h3 id="insight-objections">Objections</h3>
+          <InsightList items={analysis.objections} emptyLabel="No objections identified." />
+        </section>
+        <section aria-labelledby="insight-actions">
+          <h3 id="insight-actions">Action items</h3>
+          <InsightList items={analysis.actionItems} emptyLabel="No action items identified." />
+        </section>
+        <section aria-labelledby="insight-topics">
+          <h3 id="insight-topics">Topics</h3>
+          <InsightList items={analysis.topics} emptyLabel="No topics identified." />
+        </section>
+      </div>
+
+      {analysis.completedAt && (
+        <p className="insights-timestamp">
+          Completed {formatDate(analysis.completedAt)}
         </p>
       )}
     </div>
@@ -253,6 +498,24 @@ export default async function CallDetailPage({ params }: CallDetailPageProps) {
     console.error("Call transcription response was invalid");
   }
 
+  const { data: analysisRow, error: analysisError } = await supabase
+    .from("call_analyses")
+    .select(
+      "status, summary, sentiment, primary_intent, objections, action_items, topics, overall_score, started_at, completed_at",
+    )
+    .eq("call_id", call.id)
+    .maybeSingle();
+
+  const analysis = analysisRow ? parseAnalysisDetail(analysisRow) : null;
+  const analysisUnavailable =
+    Boolean(analysisError) || Boolean(analysisRow && !analysis);
+
+  if (analysisError) {
+    console.error("Unable to load call analysis", { code: analysisError.code });
+  } else if (analysisRow && !analysis) {
+    console.error("Call analysis response was invalid");
+  }
+
   return (
     <div className="dashboard-shell">
       <DashboardNav email={user.email ?? "Signed-in user"} />
@@ -304,6 +567,13 @@ export default async function CallDetailPage({ params }: CallDetailPageProps) {
             <TranscriptionPanel
               transcription={transcription}
               unavailable={transcriptionUnavailable}
+            />
+          </section>
+
+          <section className="insights-panel" aria-label="AI Insights">
+            <AnalysisPanel
+              analysis={analysis}
+              unavailable={analysisUnavailable}
             />
           </section>
         </article>
