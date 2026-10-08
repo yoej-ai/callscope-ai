@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import {
@@ -327,8 +328,8 @@ export default async function DashboardPage({
           </form>
         </section>
         <p className="lede">
-          Securely add call recordings to this workspace. Transcription and AI
-          analysis are not enabled yet.
+          Securely add call recordings to this workspace. A transcription worker
+          and AI analysis are not enabled yet.
         </p>
         <div className="dashboard-content">
           <CallUpload workspaceId={activeWorkspace.id} />
@@ -361,7 +362,12 @@ export default async function DashboardPage({
                 {calls.map((call) => (
                   <li key={call.id} className="call-row">
                     <div className="call-primary">
-                      <strong>{call.originalFilename}</strong>
+                      <Link
+                        className="call-link"
+                        href={`/dashboard/calls/${encodeURIComponent(call.id)}`}
+                      >
+                        {call.originalFilename}
+                      </Link>
                       <span>
                         {formatSize(call.sizeBytes)}
                         {call.contentType ? ` · ${call.contentType}` : ""}
