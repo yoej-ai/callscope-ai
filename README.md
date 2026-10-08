@@ -5,9 +5,10 @@ support teams. It is designed to turn customer conversations into secure,
 searchable summaries, intent, sentiment, objections, scores, and action items.
 
 This repository currently contains the production-oriented V1 foundation,
-private tenant-authorized audio ingestion, and the secure database/UI foundation
-for a future transcription worker. It does **not** yet transcribe calls, invoke
-LLMs, or integrate with billing and CRM systems.
+private tenant-authorized audio ingestion, a deployed transcription state
+machine, and an isolated local transcription worker. Secure transcription has
+been proven end to end against the hosted Supabase project. AI call analysis,
+speaker diarization, billing, and CRM integrations are not implemented yet.
 
 ## Foundation scope
 
@@ -24,8 +25,9 @@ LLMs, or integrate with billing and CRM systems.
 - Private Supabase Storage uploads initiated and finalized through FastAPI
 - User-triggered recovery for interrupted and stale pending uploads
 - RLS-protected transcript state and worker-only claim/lease/retry RPCs
+- Isolated local CPU worker using free Faster-Whisper transcription
 - Tenant-safe server-rendered call detail and transcript views
-- Frontend, backend, and database-security CI jobs
+- Frontend, backend, worker, and database-security CI jobs
 
 ## Architecture
 
@@ -38,7 +40,13 @@ Browser
           │
           └── FastAPI api/ ── independently verified user JWT
                   │
-                  └── Supabase Data API ── user Bearer token ── PostgreSQL RLS
+                  ├── Supabase Data API ── user Bearer token ── PostgreSQL RLS
+                  └── private Supabase Storage ── signed upload target
+
+Trusted local worker/
+  ├── service-role-only claim/lease/result RPCs
+  ├── private Storage download and media validation
+  └── local Faster-Whisper CPU transcription
 ```
 
 The frontend handles presentation and the browser session. Protected dashboard
@@ -61,6 +69,7 @@ replaces those database controls, and no service-role key is involved.
 .
 ├── web/                    Next.js application
 ├── api/                    FastAPI application and pytest suite
+├── worker/                 Isolated local transcription worker and tests
 ├── supabase/
 │   ├── migrations/         Versioned database schema and policies
 │   └── tests/              pgTAP RLS/security tests
@@ -256,9 +265,10 @@ but does not simulate two truly concurrent database sessions. Production
 reconciliation therefore keeps the conservative age threshold and skip-locked
 row processing as defense in depth.
 
-Ingestion still does not inspect file bytes. A later trusted worker must verify
-the actual media bytes before decoding or processing them. Local validation uses
-the free local Supabase stack and does not require paid services.
+The ingestion boundary does not inspect file bytes. Before transcription, the
+trusted worker validates the downloaded media signature and metadata, probes it
+with FFmpeg, and enforces size and duration bounds. Local validation uses the
+free local Supabase stack and does not require paid services.
 
 ### Secure transcription foundation
 
@@ -276,7 +286,7 @@ while claim tokens, leases, retry timing, attempt counts, and internal error cod
 have no browser-readable grants. The call-detail page queries only safe columns
 and displays a generic failed state rather than worker diagnostics.
 
-Four `SECURITY DEFINER` RPCs form the future trusted-worker boundary. Only the
+Four `SECURITY DEFINER` RPCs form the trusted-worker boundary. Only the
 Supabase `service_role` database role can execute them; anonymous and
 authenticated roles cannot, and the browser never receives service-role
 credentials. The existing FastAPI user service has no service-role configuration.
@@ -287,10 +297,50 @@ so a same-token retry after response loss is idempotent. Retryable failures wait
 five minutes and stop after three claims; only bounded machine-readable error
 codes are stored.
 
-Phase 3A provides this state machine and UI only. It does **not** install or run a
-transcription engine, decode audio, download private recordings, or create signed
-browser download URLs. Phase 3B can connect a free/local isolated worker and keep
-all service-role credentials outside the browser and existing user-facing API.
+The Phase 3A migration is deployed to the hosted Supabase project, whose migration
+history is aligned through `20261009000000_transcription_foundation.sql`. RLS is
+enabled on `call_transcriptions`; authenticated users can read only safe tenant
+transcript columns, while `claim_token` remains browser-hidden and mutation RPCs
+remain service-role-only.
+
+### Trusted transcription worker
+
+Phase 3B adds an isolated worker in `worker/`. It securely claims queued jobs,
+downloads the exact recording from private Storage, validates and probes the
+media, transcribes locally on CPU with free Faster-Whisper, and reports the result
+through the token-protected completion RPC. Modern Supabase `sb_secret_`
+credentials use `apikey` authentication only; legacy service-role JWTs remain
+supported for backward compatibility. Privileged credentials stay entirely in
+the worker environment.
+
+The speech dependency intentionally constrains PyAV to `av>=11,<19` for current
+Faster-Whisper compatibility. Dedicated worker CI installs the speech
+dependencies, checks that ceiling, and runs the offline worker suite without
+instantiating a Whisper model or downloading model weights.
+
+### Phase 3B hosted end-to-end validation
+
+Both major paths have been verified through the real hosted pipeline:
+
+- A synthetic silent WAV was securely claimed and downloaded, then rejected as
+  `invalid_transcript` after Faster-Whisper produced no usable text. The job
+  transitioned safely to `failed`, confirming failure and retry behavior.
+- A real spoken MP3 uploaded through the dashboard was queued automatically,
+  claimed and downloaded privately, transcribed locally, and completed on the
+  first attempt. The transcript and duration were stored and the tenant-protected
+  Call Detail page displayed the completed transcript.
+
+The proven flow is:
+
+```text
+Browser upload → authenticated FastAPI ingestion → private Supabase Storage
+→ uploaded call → automatic transcription queue → trusted worker claim
+→ private audio download → local Faster-Whisper transcription → completion RPC
+→ Supabase transcript record → authenticated Call Detail UI transcript display
+```
+
+This validation proves the functional and security path; it is not a claim of an
+always-on or production-scale transcription deployment.
 
 ## Database overview
 
@@ -368,12 +418,16 @@ For a hosted project, link the CLI to the intended project and review the target
 before running `supabase db push`. The migration changes authentication triggers,
 grants, and RLS policies, so apply it first in a non-production environment.
 
+The current hosted CallScope project is aligned through
+`20261009000000_transcription_foundation.sql`. For any other environment, verify
+its migration history and target independently before applying changes.
+
 Manual hosted-project steps:
 
 - copy the project URL and publishable key into ignored `web/.env.local`
 - configure the local and deployed authentication callback URLs
 - review email-provider and confirmation settings
-- apply the migration and run the security tests
+- verify the intended migration history and run the security tests locally
 - set production frontend and API origins
 
 ## Testing and validation
@@ -404,7 +458,9 @@ supabase db reset
 supabase test db
 ```
 
-GitHub Actions runs all three validation groups on pushes and pull requests. CI
+GitHub Actions runs frontend, backend, worker, and database validation on pushes
+and pull requests. Worker CI installs the speech dependencies but does not
+instantiate Faster-Whisper or download model weights. CI
 uses harmless public placeholders for build-time Supabase variables and contains
 no production secrets. Database CI uses the official `supabase/setup-cli` action
 at release `v3.0.1` and pins Supabase CLI `2.119.0` rather than floating on latest.
@@ -420,18 +476,21 @@ at release `v3.0.1` and pins Supabase CLI `2.119.0` rather than floating on late
 - JWKS and workspace reads require the configured Supabase service to be reachable
 - analysis mutation is reserved for future trusted workflows
 - raw usage events have no browser access; no aggregate usage API exists yet
-- private audio ingestion, call history, and the transcription state/UI foundation
-  are available, but there is no byte-level media validation, transcription
-  engine, LLM, vector, billing, or CRM code
+- byte-level media validation occurs in the trusted worker, not at browser upload
 - stale reconciliation is user-triggered and bounded; automatic scheduling and
   trusted deletion of invalid or orphaned Storage objects remain deferred
-- transcription claims are database-backed and worker-triggered; no worker runtime,
-  scheduler, audio decoder, model, diarization, or provider integration exists yet
+- the transcription worker is local/manual and processes jobs only while its
+  machine is running; no always-on cloud or production-scale worker exists
+- speaker diarization, AI call analysis and insights, vector search, billing, and
+  CRM integrations are not implemented
+- the default Whisper `tiny` model can misrecognize proper names or language
+  labels; this is a model-quality limitation rather than a pipeline failure
 
 ## Recommended next phase
 
-Phase 3B should add an isolated free/local worker that validates and decodes media
-bytes, retrieves private recordings through a trusted server-side mechanism, and
-uses the service-role-only claim/lease/result RPCs. Actual transcription and all
-analysis remain unimplemented.
+The next planned phase is **AI Call Analysis & Insights**. It should transform
+completed, tenant-protected transcripts into structured summaries, intent,
+sentiment, objections, scores, and action items without weakening the existing
+RLS, private Storage, or worker trust boundaries. Speaker diarization and
+production always-on worker deployment remain separate future work.
 

@@ -59,11 +59,30 @@ Both credential types belong only in this trusted server-side worker runtime.
   private audio, sensitive authorization headers, URLs, or HTTP response bodies.
 - Unit tests run offline in GitHub CI without downloading model weights.
 
+## Hosted validation status
+
+The Phase 3A transcription migration is deployed to hosted Supabase, with hosted
+migration history aligned through
+`20261009000000_transcription_foundation.sql`. The worker has been verified in
+two hosted end-to-end scenarios through the real private ingestion path:
+
+- A synthetic silent WAV was claimed and downloaded securely, processed by
+  Faster-Whisper, rejected as `invalid_transcript`, and transitioned safely to
+  `failed`. Retry and state-machine behavior remained intact.
+- A real spoken MP3 uploaded through the dashboard was automatically queued,
+  claimed, downloaded from private Storage, and transcribed locally. Completion
+  succeeded on the first attempt, transcript text and duration were stored, and
+  the tenant-protected Call Detail page displayed the transcript.
+
+These checks prove the hosted failure and success paths without making the worker
+an always-on production service. No private identifiers, recording content, or
+credentials are recorded here.
+
 ## Before production
 
-The GitHub Phase 3A merge did not deploy migrations to hosted Supabase.
-Confirm the exact target Supabase project and backup, then apply migrations
-separately after approval. Never expose a service-role key to the browser.
+Never expose a modern Supabase secret or legacy service-role JWT to the browser.
+For any new environment, confirm the exact target project, backup, and migration
+history before applying migrations separately under explicit approval.
 
 This is not a hardened media-decoding sandbox. For untrusted uploads, run the
 worker in a restricted container or OS sandbox with no unnecessary network
@@ -71,4 +90,7 @@ egress, finite CPU/memory/disk quotas, up-to-date FFmpeg packages, and secure
 secrets management. Add monitoring, model caching, true concurrency tests,
 live end-to-end checks, and transcript retention/deletion procedures before
 processing customer recordings in production. No production worker deployment
-or always-on free hosting is part of this implementation.
+or always-on free hosting is part of this implementation. The local/manual worker
+processes jobs only while its machine is running. The default Whisper `tiny`
+model may misrecognize proper names or language labels; that is a model-quality
+limitation rather than a pipeline failure.
