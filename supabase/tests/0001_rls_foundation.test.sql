@@ -32,11 +32,11 @@ insert into public.calls (
   'completed'
 );
 
-insert into public.call_analyses (id, call_id, summary)
+insert into public.call_analyses (id, call_id, status)
 values (
   '30000000-0000-0000-0000-000000000001',
   '20000000-0000-0000-0000-000000000001',
-  'Fixture analysis'
+  'queued'
 );
 
 insert into public.usage_events (
