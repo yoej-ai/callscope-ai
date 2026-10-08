@@ -10,7 +10,8 @@ free Faster-Whisper engine, and saves output through the worker-only RPC.
 - Python 3.12 or newer; FFmpeg/ffprobe installed and on PATH
 - Supabase database with the Phase 3A SQL migration applied
 - CPU and disk space for the free Whisper model
-- Worker-only SUPABASE_SERVICE_ROLE_KEY in the private worker environment
+- Worker-only `SUPABASE_SECRET_KEY` in the private worker environment, or a
+  legacy `SUPABASE_SERVICE_ROLE_KEY` JWT for backward compatibility
 - Appropriate recording consent and privacy/retention/deletion controls
 
 ## Setup (from worker/)
@@ -18,10 +19,12 @@ free Faster-Whisper engine, and saves output through the worker-only RPC.
 1. Create virtual environment: python -m venv .venv
 2. Activate .venv, then install: python -m pip install -e ".[speech,dev]"
 3. Install FFmpeg (including ffprobe) via the OS package manager.
-4. Supply private process environment variables SUPABASE_URL,
-   SUPABASE_SERVICE_ROLE_KEY, and optionally WHISPER_MODEL=tiny. The
-   tracked .env.example contains dummy values only; the worker does not
-   automatically load a .env file.
+4. Supply private process environment variables `SUPABASE_URL`, the preferred
+   `SUPABASE_SECRET_KEY`, and optionally `WHISPER_MODEL=tiny`. The tracked
+   `.env.example` contains dummy values only; the worker does not automatically
+   load a `.env` file. `SUPABASE_SERVICE_ROLE_KEY` remains supported only for a
+   legacy service-role JWT. Do not configure both key variables with different
+   values.
 5. Run one job: callscope-transcribe
 6. Run a continuous process on a trusted machine:
    callscope-transcribe --loop --poll-seconds 30
@@ -30,6 +33,11 @@ The free model may download at initial startup; private recordings are not
 sent to any transcription API or hosted LLM. A local worker processes only
 while its computer is running. Do not put any secret-role credentials in web/,
 api/, GitHub Actions secrets for builds, logs, or NEXT_PUBLIC_* variables.
+
+Modern `sb_secret_...` credentials are sent only in Supabase's `apikey` header;
+they are not JWTs and must never be sent as `Authorization: Bearer` values.
+Legacy service-role JWTs retain the compatible `apikey` plus Bearer headers.
+Both credential types belong only in this trusted server-side worker runtime.
 
 ## Existing safeguards
 

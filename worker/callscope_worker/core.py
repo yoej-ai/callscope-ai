@@ -5,13 +5,14 @@ No raw media, transcripts, access tokens, or response bodies are logged.
 """
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
 import re
 import tempfile
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 from urllib.parse import quote, urlsplit
@@ -30,6 +31,21 @@ MIME_EXTENSIONS = {
     "audio/ogg": ".ogg",
 }
 LANGUAGE_RE = re.compile(r"^[a-z]{2,3}(?:-[a-z0-9]{2,8}){0,2}$")
+JWT_SEGMENT_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
+
+
+def _is_legacy_service_role_jwt(value: str) -> bool:
+    parts = value.split(".")
+    if len(parts) != 3 or any(not JWT_SEGMENT_RE.fullmatch(part) for part in parts):
+        return False
+    try:
+        payload_segment = parts[1] + "=" * (-len(parts[1]) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(payload_segment))
+    except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    # Classification only: decoding this unverified payload is not authentication.
+    # Supabase remains responsible for verifying the JWT when it receives requests.
+    return isinstance(payload, dict) and payload.get("role") == "service_role"
 
 
 class WorkerError(Exception):
@@ -44,13 +60,15 @@ class WorkerError(Exception):
 @dataclass(frozen=True)
 class Settings:
     supabase_url: str
-    service_role_key: str
+    supabase_key: str = field(repr=False)
+    use_bearer_auth: bool
     model: str
 
     @classmethod
     def from_env(cls) -> "Settings":
         value = os.getenv("SUPABASE_URL", "").rstrip("/")
-        key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+        secret_key = os.getenv("SUPABASE_SECRET_KEY", "")
+        legacy_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
         model = os.getenv("WHISPER_MODEL", "tiny")
         url = urlsplit(value)
         local_host = url.hostname in {"localhost", "127.0.0.1"}
@@ -65,11 +83,21 @@ class Settings:
             or url.fragment
         ):
             raise ValueError("SUPABASE_URL must be an HTTPS origin or local Supabase HTTP origin")
-        if not key or key == "replace-with-local-service-role-key":
-            raise ValueError("A worker-only SUPABASE_SERVICE_ROLE_KEY is required")
+        if secret_key and legacy_key and secret_key != legacy_key:
+            raise ValueError("Conflicting Supabase privileged key settings")
+        if secret_key:
+            if not secret_key.startswith("sb_secret_") or secret_key == "sb_secret_":
+                raise ValueError("A valid worker-only Supabase privileged key is required")
+            key = secret_key
+            use_bearer_auth = False
+        elif legacy_key and _is_legacy_service_role_jwt(legacy_key):
+            key = legacy_key
+            use_bearer_auth = True
+        else:
+            raise ValueError("A valid worker-only Supabase privileged key is required")
         if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,99}", model):
             raise ValueError("WHISPER_MODEL must be a simple model identifier")
-        return cls(value, key, model)
+        return cls(value, key, use_bearer_auth, model)
 
 
 @dataclass(frozen=True)
@@ -165,13 +193,15 @@ class Gateway:
 
     def __init__(self, settings: Settings, http: httpx.Client | None = None) -> None:
         self._owned = http is None
+        headers = {
+            "apikey": settings.supabase_key,
+            "accept-encoding": "identity",
+        }
+        if settings.use_bearer_auth:
+            headers["authorization"] = "Bearer " + settings.supabase_key
         self.http = http or httpx.Client(
             base_url=settings.supabase_url + "/",
-            headers={
-                "apikey": settings.service_role_key,
-                "authorization": "Bearer " + settings.service_role_key,
-                "accept-encoding": "identity",
-            },
+            headers=headers,
             timeout=httpx.Timeout(60, connect=15),
             follow_redirects=False,
             trust_env=False,

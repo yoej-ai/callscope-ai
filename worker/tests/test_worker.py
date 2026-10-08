@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import subprocess
 from dataclasses import replace
@@ -26,6 +27,30 @@ CALL = "20000000-0000-0000-0000-000000000041"
 WORKSPACE = "10000000-0000-0000-0000-000000000041"
 TOKEN = "30000000-0000-0000-0000-000000000041"
 WAV = b"RIFF" + b"\x00\x00\x00\x00" + b"WAVE" + b"audio-test"
+MODERN_SECRET = "sb_secret_unit_test_not_real"
+PUBLISHABLE_KEY = "sb_publishable_unit_test_not_real"
+
+
+def jwt_segment(value: dict[str, object]) -> str:
+    encoded = json.dumps(value, separators=(",", ":")).encode()
+    return base64.urlsafe_b64encode(encoded).rstrip(b"=").decode()
+
+
+def legacy_jwt(role: str) -> str:
+    return ".".join([
+        jwt_segment({"alg": "HS256", "typ": "JWT"}),
+        jwt_segment({"role": role, "iss": "unit-test"}),
+        "not-a-real-signature",
+    ])
+
+
+LEGACY_SERVICE_ROLE_JWT = legacy_jwt("service_role")
+
+
+@pytest.fixture(autouse=True)
+def clear_worker_key_environment(monkeypatch) -> None:
+    monkeypatch.delenv("SUPABASE_SECRET_KEY", raising=False)
+    monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
 
 
 def claim_payload(**overrides: object) -> dict[str, object]:
@@ -48,7 +73,7 @@ def job() -> Job:
 
 
 def settings() -> Settings:
-    return Settings("https://unit-test.supabase.co", "test-secret-not-real", "tiny")
+    return Settings("https://unit-test.supabase.co", MODERN_SECRET, False, "tiny")
 
 
 def test_claim_validates_exact_private_path_and_mime() -> None:
@@ -70,7 +95,7 @@ def test_claim_validates_exact_private_path_and_mime() -> None:
 
 
 def test_settings_disallow_insecure_nonlocal_origin_and_empty_key(monkeypatch) -> None:
-    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "test-secret-not-real")
+    monkeypatch.setenv("SUPABASE_SECRET_KEY", MODERN_SECRET)
     monkeypatch.setenv("SUPABASE_URL", "http://remote.example.com")
     with pytest.raises(ValueError):
         Settings.from_env()
@@ -79,9 +104,80 @@ def test_settings_disallow_insecure_nonlocal_origin_and_empty_key(monkeypatch) -
         Settings.from_env()
     monkeypatch.setenv("SUPABASE_URL", "http://127.0.0.1:54321")
     assert Settings.from_env().model == "tiny"
-    monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY")
+    monkeypatch.delenv("SUPABASE_SECRET_KEY")
     with pytest.raises(ValueError):
         Settings.from_env()
+
+
+def test_settings_accept_modern_secret_and_legacy_service_role_jwt(monkeypatch) -> None:
+    monkeypatch.setenv("SUPABASE_URL", "https://project.supabase.co")
+    monkeypatch.setenv("SUPABASE_SECRET_KEY", MODERN_SECRET)
+    modern = Settings.from_env()
+    assert modern.supabase_key == MODERN_SECRET
+    assert modern.use_bearer_auth is False
+    assert MODERN_SECRET not in repr(modern)
+
+    monkeypatch.delenv("SUPABASE_SECRET_KEY")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", LEGACY_SERVICE_ROLE_JWT)
+    legacy = Settings.from_env()
+    assert legacy.supabase_key == LEGACY_SERVICE_ROLE_JWT
+    assert legacy.use_bearer_auth is True
+    assert LEGACY_SERVICE_ROLE_JWT not in repr(legacy)
+
+
+def test_gateway_uses_key_type_appropriate_headers() -> None:
+    modern = Gateway(settings())
+    try:
+        assert modern.http.headers["apikey"] == MODERN_SECRET
+        assert "authorization" not in modern.http.headers
+        assert modern.http.headers["accept-encoding"] == "identity"
+    finally:
+        modern.close()
+
+    legacy_settings = Settings(
+        "https://unit-test.supabase.co", LEGACY_SERVICE_ROLE_JWT, True, "tiny"
+    )
+    legacy = Gateway(legacy_settings)
+    try:
+        assert legacy.http.headers["apikey"] == LEGACY_SERVICE_ROLE_JWT
+        assert legacy.http.headers["authorization"] == f"Bearer {LEGACY_SERVICE_ROLE_JWT}"
+        assert legacy.http.headers["accept-encoding"] == "identity"
+    finally:
+        legacy.close()
+
+
+def test_conflicting_key_environment_fails_closed_without_leaking_values(
+    monkeypatch, caplog
+) -> None:
+    monkeypatch.setenv("SUPABASE_URL", "https://project.supabase.co")
+    monkeypatch.setenv("SUPABASE_SECRET_KEY", MODERN_SECRET)
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", LEGACY_SERVICE_ROLE_JWT)
+    with pytest.raises(ValueError) as error:
+        Settings.from_env()
+    message = str(error.value)
+    assert MODERN_SECRET not in message
+    assert LEGACY_SERVICE_ROLE_JWT not in message
+    assert MODERN_SECRET not in caplog.text
+    assert LEGACY_SERVICE_ROLE_JWT not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "variable,value",
+    [
+        ("SUPABASE_SECRET_KEY", PUBLISHABLE_KEY),
+        ("SUPABASE_SECRET_KEY", "unknown-key"),
+        ("SUPABASE_SERVICE_ROLE_KEY", "not-a-jwt"),
+        ("SUPABASE_SERVICE_ROLE_KEY", legacy_jwt("anon")),
+    ],
+)
+def test_settings_reject_publishable_malformed_and_non_service_role_keys(
+    monkeypatch, variable: str, value: str
+) -> None:
+    monkeypatch.setenv("SUPABASE_URL", "https://project.supabase.co")
+    monkeypatch.setenv(variable, value)
+    with pytest.raises(ValueError) as error:
+        Settings.from_env()
+    assert value not in str(error.value)
 
 
 def test_gateway_claim_and_download_private_audio_without_logging_secrets(tmp_path, caplog) -> None:
@@ -89,6 +185,8 @@ def test_gateway_claim_and_download_private_audio_without_logging_secrets(tmp_pa
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request)
+        assert request.headers["apikey"] == MODERN_SECRET
+        assert "authorization" not in request.headers
         if request.url.path.endswith("/rpc/claim_transcription_jobs"):
             assert json.loads(request.content) == {"p_limit": 1}
             return httpx.Response(200, json=[claim_payload()])
@@ -99,7 +197,7 @@ def test_gateway_claim_and_download_private_audio_without_logging_secrets(tmp_pa
 
     with httpx.Client(
         base_url="https://unit-test.supabase.co/",
-        headers={"authorization": "Bearer test-secret-not-real", "apikey": "test-secret-not-real"},
+        headers={"apikey": MODERN_SECRET},
         transport=httpx.MockTransport(handler),
     ) as http:
         gateway = Gateway(settings(), http)
@@ -110,7 +208,7 @@ def test_gateway_claim_and_download_private_audio_without_logging_secrets(tmp_pa
         assert dest.read_bytes() == WAV
         verify_media_magic(dest, "audio/wav")
     assert len(seen) == 2
-    assert "test-secret-not-real" not in caplog.text
+    assert MODERN_SECRET not in caplog.text
 
 
 def test_gateway_rejects_oversized_and_short_responses(tmp_path) -> None:
