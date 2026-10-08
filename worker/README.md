@@ -29,6 +29,11 @@ free Faster-Whisper engine, and saves output through the worker-only RPC.
 6. Run a continuous process on a trusted machine:
    callscope-transcribe --loop --poll-seconds 30
 
+The speech extra intentionally constrains PyAV to `>=11,<19`: the current
+Faster-Whisper integration uses an `av.open` API that is incompatible with
+PyAV 19. This is a compatibility constraint, not a security downgrade; do not
+remove it until upstream compatibility has been verified.
+
 The free model may download at initial startup; private recordings are not
 sent to any transcription API or hosted LLM. A local worker processes only
 while its computer is running. Do not put any secret-role credentials in web/,
