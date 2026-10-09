@@ -6,8 +6,9 @@ searchable summaries, intent, sentiment, objections, scores, and action items.
 
 This repository contains the production-oriented V1 foundation, private
 tenant-authorized audio ingestion, transcription and AI-analysis state machines,
-isolated transcription and analysis workers, and a tenant-safe Call Detail
-experience. The source implements the complete upload, transcription, analysis,
+isolated transcription and analysis workers, a unified local supervisor, and a
+tenant-safe Call Detail experience. The source implements the complete upload,
+transcription, analysis,
 and structured-insights flow. Repository history records hosted end-to-end
 validation of both the secure transcription and AI-analysis paths; that evidence
 does not mean the local workers are always running or that an external hosted
@@ -34,6 +35,7 @@ deployment remain future work.
 - RLS-protected transcript state and worker-only claim/lease/retry RPCs
 - Isolated local CPU worker using free Faster-Whisper transcription
 - Isolated local Ollama analysis worker using Qwen3 4B Instruct
+- Unified local supervisor with independent polling and bounded failure backoff
 - Strict schema-constrained AI results with prompt-injection hardening
 - Tenant-safe server-rendered call detail, transcript, and AI-insights views
 - Bounded AI-analysis state, worker RPC boundary, and live queued/processing refresh
@@ -56,7 +58,9 @@ Browser
 Trusted local worker/
   ├── service-role-only claim/lease/result RPCs
   ├── private Storage download and media validation
-  └── local Faster-Whisper CPU transcription
+  ├── local Faster-Whisper CPU transcription
+  ├── loopback-only Ollama structured analysis
+  └── one local supervisor for both isolated processing loops
 ```
 
 The frontend handles presentation and the browser session. Protected dashboard
@@ -79,7 +83,7 @@ replaces those database controls, and no service-role key is involved.
 .
 ├── web/                    Next.js application
 ├── api/                    FastAPI application and pytest suite
-├── worker/                 Isolated local transcription worker and tests
+├── worker/                 Local processing workers, supervisor, and tests
 ├── supabase/
 │   ├── migrations/         Versioned database schema and policies
 │   └── tests/              pgTAP RLS/security tests
@@ -381,6 +385,42 @@ local Ollama/model preflight before claiming a job so a stopped Ollama process o
 missing configured model does not consume an analysis attempt. Normal INFO logs
 from `httpx` and `httpcore` are suppressed to avoid unnecessary request metadata.
 
+### Local worker orchestration
+
+Phase 5B adds `callscope-worker`, the current local MVP operating strategy for
+running transcription and analysis together:
+
+```bash
+cd worker
+callscope-worker
+```
+
+The worker environment requires the private Supabase worker configuration,
+Faster-Whisper and its media dependencies (including FFmpeg/ffprobe), local
+loopback-only Ollama, and the `qwen3:4b-instruct` model. Each pipeline runs in
+its own thread, owns its clients, and reuses the existing one-job functions and
+worker-only RPCs. Empty queues use an interruptible 30-second poll interval;
+infrastructure failures use independent exponential backoff capped at 60 seconds.
+
+If Ollama is down or the configured model is unavailable, analysis preflight
+fails before a database claim and therefore does not consume an analysis attempt.
+The analysis loop backs off without stopping transcription. Transcription-side
+infrastructure failures similarly do not stop healthy analysis processing.
+Logs contain only pipeline names, bounded internal codes, permitted call IDs,
+and retry timing—not transcripts, prompts, model output, credentials, signed
+URLs, or authorization headers.
+
+Ctrl+C or a supported termination signal stops idle/backoff waits immediately,
+prevents another processing iteration after shutdown is observed, waits for
+in-flight work to finish safely, and closes both pipelines' HTTP clients without
+a normal-shutdown traceback. The original one-shot commands
+`callscope-transcribe` and `callscope-analyze`, plus their independent `--loop`
+modes, remain available.
+
+This supervisor is local process orchestration, not an always-on production or
+cloud deployment. It does not provide autoscaling, production monitoring,
+distributed queues, high availability, or an external process manager.
+
 The `overall_score` is defined as an engagement/opportunity score rather than a
 sentiment score. Genuine business conversations retain bounded 0–100 scores,
 while transcripts with no genuine business intent, such as workflow tests or
@@ -535,8 +575,8 @@ at release `v3.0.1` and pins Supabase CLI `2.119.0` rather than floating on late
 - byte-level media validation occurs in the trusted worker, not at browser upload
 - stale reconciliation is user-triggered and bounded; automatic scheduling and
   trusted deletion of invalid or orphaned Storage objects remain deferred
-- the transcription worker is local/manual and processes jobs only while its
-  machine is running; no always-on cloud or production-scale worker exists
+- the unified worker supervisor is local/manual and processes jobs only while
+  its machine is running; no always-on cloud or production-scale worker exists
 - AI Call Analysis & Insights runs through the local Ollama worker; speaker
   diarization, vector search, billing, CRM integrations, and always-on cloud
   inference are not implemented
@@ -545,12 +585,10 @@ at release `v3.0.1` and pins Supabase CLI `2.119.0` rather than floating on late
 
 ## Recommended next phase
 
-After Phase 4C reliability hardening, the next product phase should focus on
-running the completed transcription and analysis pipeline as a more usable SaaS
-workflow without weakening the existing tenant, RLS, private Storage, and
-claim-token boundaries. Candidate work includes an explicit worker-operation
-strategy, broader end-to-end product validation, improved transcription language
-quality, and product-level insights workflows.
+After Phase 5B local orchestration, the next product phase should focus on
+broader end-to-end product validation, improved transcription language quality,
+and product-level insights workflows without weakening the existing tenant,
+RLS, private Storage, and claim-token boundaries.
 
 Speaker diarization, vector search, billing, CRM integrations, and always-on
 production worker deployment remain separate future phases. Paid model services

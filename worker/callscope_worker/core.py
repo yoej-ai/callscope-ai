@@ -302,7 +302,9 @@ class LeaseHeartbeat:
 
     def stop(self) -> None:
         self._stop.set()
-        self._thread.join(timeout=5)
+        # Renewal I/O already has bounded HTTP timeouts. Wait for it to finish
+        # before the owning gateway is closed so no heartbeat thread is left.
+        self._thread.join()
 
 
 def process_one(gateway: Gateway, transcriber: Transcriber) -> bool:
