@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from callscope_worker.analysis_worker import AnalysisWorkerError
@@ -51,6 +53,21 @@ def test_ollama_settings_from_env_rejects_remote_origin(
 
     with pytest.raises(ValueError):
         OllamaSettings.from_env()
+
+
+def test_configure_logging_suppresses_http_client_info_logs() -> None:
+    old_httpx_level = logging.getLogger("httpx").level
+    old_httpcore_level = logging.getLogger("httpcore").level
+
+    try:
+        analysis_cli.configure_logging()
+
+        assert logging.getLogger("httpx").level == logging.WARNING
+        assert logging.getLogger("httpcore").level == logging.WARNING
+
+    finally:
+        logging.getLogger("httpx").setLevel(old_httpx_level)
+        logging.getLogger("httpcore").setLevel(old_httpcore_level)
 
 
 def test_analysis_cli_one_job_run_closes_resources(
@@ -162,6 +179,68 @@ def test_analysis_cli_returns_failure_when_queue_rpc_is_unavailable(
     ) -> bool:
         raise AnalysisWorkerError(
             "analysis_rpc_unavailable",
+            retryable=True,
+        )
+
+    monkeypatch.setattr(
+        analysis_cli,
+        "Settings",
+        FakeSettings,
+    )
+    monkeypatch.setattr(
+        analysis_cli,
+        "OllamaSettings",
+        FakeSettings,
+    )
+    monkeypatch.setattr(
+        analysis_cli,
+        "AnalysisGateway",
+        FakeGateway,
+    )
+    monkeypatch.setattr(
+        analysis_cli,
+        "OllamaAnalyzer",
+        FakeAnalyzer,
+    )
+    monkeypatch.setattr(
+        analysis_cli,
+        "process_one_analysis",
+        fake_process,
+    )
+
+    assert analysis_cli.main([]) == 1
+
+
+def test_analysis_cli_returns_failure_when_preflight_blocks_processing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeSettings:
+        @classmethod
+        def from_env(cls):
+            return object()
+
+    class FakeGateway:
+        def __init__(self, settings):
+            pass
+
+        def close(self) -> None:
+            pass
+
+    class FakeAnalyzer:
+        def __init__(self, settings):
+            pass
+
+        def close(self) -> None:
+            pass
+
+    def fake_process(
+        gateway,
+        analyzer,
+        *,
+        heartbeat_interval_seconds: float = 60.0,
+    ) -> bool:
+        raise AnalysisWorkerError(
+            "ollama_unavailable",
             retryable=True,
         )
 

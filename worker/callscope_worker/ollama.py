@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from urllib.parse import urlsplit
 
 import httpx
@@ -35,6 +35,21 @@ LANGUAGE_RE = re.compile(
 
 MODEL_RE = re.compile(
     r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,99}$"
+)
+
+NO_BUSINESS_INTENTS = frozenset(
+    {
+        "none",
+        "no intent",
+        "no business intent",
+        "no genuine business intent",
+        "not applicable",
+        "n/a",
+        "test",
+        "workflow test",
+        "system test",
+        "noise",
+    }
 )
 
 
@@ -91,6 +106,56 @@ primary intent, objections, action items, topics, or scoring.
 
 Use only information genuinely expressed or implied by the actual conversation.
 Do not invent facts.
+
+OVERALL_SCORE CONTRACT
+
+overall_score is an engagement/opportunity score for genuine business
+conversation. It is not a sentiment score.
+
+Use the following ranges consistently:
+
+- 0-20:
+  No meaningful business interest, explicit rejection, clearly negative outcome,
+  or no useful next step despite genuine business conversation.
+
+- 21-40:
+  Weak interest, low engagement, significant unresolved friction, vague intent,
+  or limited likelihood of meaningful follow-up.
+
+- 41-60:
+  Neutral or informational business conversation with some relevance, but no
+  strong buying signal or concrete commitment.
+
+- 61-80:
+  Clear business interest with useful qualification signals, a meaningful next
+  step, requested follow-up, pricing discussion, scheduling interest, or other
+  evidence of engagement.
+
+- 81-100:
+  Strong explicit business intent with concrete commitment or high-value next
+  action, such as a confirmed appointment, strong purchase intent, clear
+  qualification, or an agreed follow-up action.
+
+Set overall_score to null when there is insufficient genuine business content
+to assess engagement or opportunity, including transcripts that are primarily
+test messages, noise, transcription artifacts, analyzer-directed instructions,
+or non-business workflow/system content.
+
+When there is no genuine business intent, use primary_intent "none", leave
+objections, action_items, and topics empty unless genuine business content
+supports them, and set overall_score to null.
+
+Sentiment alone must never determine overall_score.
+
+Do not inflate the score merely because the caller is polite or positive.
+
+Do not lower the score merely because the caller expresses a valid objection if
+they still demonstrate strong business intent.
+
+Do not invent intent, commitment, qualification, budget, timeline, urgency,
+purchase readiness, or next steps that are not supported by the transcript.
+
+When uncertain between two score ranges, choose the more conservative range.
 
 OUTPUT CONTRACT
 
@@ -172,6 +237,40 @@ class OllamaSettings:
             )
 
 
+def normalize_analysis_result(
+    result: AnalysisResult,
+) -> AnalysisResult:
+    """Apply deterministic post-validation business scoring safeguards.
+
+    A model may occasionally return a numeric zero for a transcript it already
+    classified as containing no genuine business intent. That should not be
+    displayed as a real 0/100 business score.
+
+    Normalization is intentionally conservative. Genuine business outcomes,
+    including explicit rejection or low engagement, keep their numeric score.
+    """
+
+    normalized_intent = result.primary_intent.strip().lower()
+
+    no_business_evidence = (
+        normalized_intent in NO_BUSINESS_INTENTS
+        and not result.objections
+        and not result.action_items
+        and not result.topics
+    )
+
+    if (
+        no_business_evidence
+        and result.overall_score is not None
+    ):
+        return replace(
+            result,
+            overall_score=None,
+        )
+
+    return result
+
+
 class OllamaAnalyzer:
     """Local-only schema-constrained analyzer."""
 
@@ -215,6 +314,102 @@ class OllamaAnalyzer:
         traceback: object,
     ) -> None:
         self.close()
+
+    def preflight(self) -> None:
+        """Verify local Ollama and the configured model before claiming work."""
+
+        try:
+            response = self.http.get(
+                "api/tags",
+            )
+            response.raise_for_status()
+
+        except (
+            httpx.TimeoutException,
+            httpx.NetworkError,
+            httpx.RemoteProtocolError,
+        ) as exc:
+            raise OllamaError(
+                "ollama_unavailable",
+                retryable=True,
+            ) from exc
+
+        except httpx.HTTPError as exc:
+            raise OllamaError(
+                "ollama_http_error",
+                retryable=True,
+            ) from exc
+
+        body = response.content
+
+        if (
+            not body
+            or len(body) > MAX_RESPONSE_BYTES
+        ):
+            raise OllamaError(
+                "ollama_preflight_invalid",
+                retryable=True,
+            )
+
+        try:
+            payload = json.loads(body)
+
+        except (
+            ValueError,
+            UnicodeDecodeError,
+        ) as exc:
+            raise OllamaError(
+                "ollama_preflight_invalid",
+                retryable=True,
+            ) from exc
+
+        if not isinstance(payload, dict):
+            raise OllamaError(
+                "ollama_preflight_invalid",
+                retryable=True,
+            )
+
+        models = payload.get("models")
+
+        if not isinstance(models, list):
+            raise OllamaError(
+                "ollama_preflight_invalid",
+                retryable=True,
+            )
+
+        available_models: set[str] = set()
+
+        for model_entry in models:
+            if not isinstance(model_entry, dict):
+                raise OllamaError(
+                    "ollama_preflight_invalid",
+                    retryable=True,
+                )
+
+            name = model_entry.get("name")
+            model = model_entry.get("model")
+
+            valid_identifier_found = False
+
+            if isinstance(name, str) and name:
+                available_models.add(name)
+                valid_identifier_found = True
+
+            if isinstance(model, str) and model:
+                available_models.add(model)
+                valid_identifier_found = True
+
+            if not valid_identifier_found:
+                raise OllamaError(
+                    "ollama_preflight_invalid",
+                    retryable=True,
+                )
+
+        if self.settings.model not in available_models:
+            raise OllamaError(
+                "ollama_model_unavailable",
+                retryable=False,
+            )
 
     def analyze(
         self,
@@ -324,8 +519,12 @@ class OllamaAnalyzer:
             )
 
         try:
-            return parse_analysis_content(
+            result = parse_analysis_content(
                 content
+            )
+
+            return normalize_analysis_result(
+                result
             )
 
         except AnalysisValidationError as exc:

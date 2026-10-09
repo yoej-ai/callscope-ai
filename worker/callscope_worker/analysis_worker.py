@@ -1,6 +1,7 @@
 """Trusted CallScope AI analysis-worker lifecycle.
 
 Responsibilities:
+- Verify the local analysis engine before claiming database work.
 - Claim completed transcripts through worker-only Supabase RPCs.
 - Treat every transcript as untrusted input.
 - Maintain the analysis lease while local inference is running.
@@ -82,6 +83,7 @@ class AnalysisJob:
                 or not 1 <= attempt_count <= 3
             ):
                 raise ValueError("invalid attempt")
+
         except (
             KeyError,
             TypeError,
@@ -104,6 +106,8 @@ class AnalysisJob:
 
 
 class Analyzer(Protocol):
+    def preflight(self) -> None: ...
+
     def analyze(
         self,
         transcript: str,
@@ -165,6 +169,7 @@ class AnalysisGateway:
             )
             response.raise_for_status()
             return response.json()
+
         except (
             httpx.HTTPError,
             ValueError,
@@ -290,6 +295,7 @@ class AnalysisLeaseHeartbeat:
                 if not self.gateway.renew(self.job):
                     self.lost = True
                     return
+
             except Exception:
                 # Never log RPC bodies or private claim metadata here.
                 self.lost = True
@@ -306,6 +312,27 @@ class AnalysisLeaseHeartbeat:
         )
 
 
+def _run_preflight(analyzer: Analyzer) -> None:
+    """Verify inference availability before any database job is claimed."""
+
+    try:
+        analyzer.preflight()
+
+    except OllamaError as exc:
+        raise AnalysisWorkerError(
+            exc.code,
+            retryable=exc.retryable,
+        ) from exc
+
+    except Exception as exc:
+        # Do not include the original exception message. A third-party
+        # implementation could expose local paths, payloads, or configuration.
+        raise AnalysisWorkerError(
+            "analysis_preflight_error",
+            retryable=True,
+        ) from exc
+
+
 def process_one_analysis(
     gateway: AnalysisGateway,
     analyzer: Analyzer,
@@ -316,11 +343,19 @@ def process_one_analysis(
 
     Returns False only when the queue is empty.
 
+    Before any database claim is attempted, the analyzer must successfully
+    complete its local preflight check. This prevents infrastructure failures
+    such as a stopped Ollama process or missing model from consuming a database
+    analysis attempt.
+
     Completion is attempted only when:
+    - analyzer preflight succeeded before the claim,
     - model inference succeeded,
     - the model result passed local strict validation,
     - and the worker still owns the active lease.
     """
+
+    _run_preflight(analyzer)
 
     claimed = gateway.claim()
 
@@ -343,6 +378,7 @@ def process_one_analysis(
                 job.transcript_text,
                 language=job.language_code,
             )
+
         except OllamaError as exc:
             raise AnalysisWorkerError(
                 exc.code,
@@ -382,6 +418,7 @@ def process_one_analysis(
                     job,
                     exc,
                 )
+
             except AnalysisWorkerError:
                 LOG.error(
                     "Could not record analysis failure for call %s",
@@ -405,6 +442,7 @@ def process_one_analysis(
                         retryable=True,
                     ),
                 )
+
             except AnalysisWorkerError:
                 LOG.error(
                     "Could not record unexpected analysis failure for call %s",
