@@ -96,8 +96,16 @@ function formatDate(value: string) {
   }).format(new Date(value));
 }
 
-function statusLabel(status: string) {
-  return status.replaceAll("_", " ");
+function uploadStatusLabel(status: string) {
+  const labels: Record<string, string> = {
+    pending_upload: "Upload pending",
+    uploaded: "Upload complete",
+    processing: "Upload processing",
+    completed: "Upload complete",
+    failed: "Upload failed",
+  };
+
+  return labels[status] ?? "Upload status unavailable";
 }
 
 function DashboardApiError({ email, kind }: DashboardApiErrorProps) {
@@ -375,7 +383,7 @@ export default async function DashboardPage({
                     </div>
                     <div className="call-secondary">
                       <span className={`call-status ${call.status}`}>
-                        {statusLabel(call.status)}
+                        {uploadStatusLabel(call.status)}
                       </span>
                       <time dateTime={call.uploadCompletedAt ?? call.createdAt}>
                         {formatDate(call.uploadCompletedAt ?? call.createdAt)}

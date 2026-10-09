@@ -51,6 +51,23 @@ failure is likewise contained to the transcription loop while healthy analysis
 continues. Failures are logged using only the pipeline name, bounded error code,
 and retry delay.
 
+Common startup and preflight codes are deliberately safe and actionable:
+
+| Pipeline/code | Operator action |
+| --- | --- |
+| `worker_configuration_invalid` | Check that the private worker environment has a valid Supabase origin and exactly one supported privileged worker key. Do not print the values. |
+| `ffprobe_unavailable` | Install FFmpeg/ffprobe and ensure it is on `PATH`. |
+| `speech_dependencies_unavailable` | Install the worker's `speech` extra in the active environment. |
+| `transcription_model_unavailable` | Check local model availability, disk space, and network access needed for the initial public model download. |
+| `analysis_configuration_invalid` | Restore the loopback-only Ollama URL and a valid local model identifier. |
+| `ollama_unavailable` | Start local Ollama; transcription continues independently. |
+| `ollama_model_unavailable` | Run `ollama pull qwen3:4b-instruct`, or pull the safely configured local model. |
+
+The supervisor never appends exception messages or configuration values to
+these logs. Repeated failures retain the capped backoff and do not become a
+tight loop. An analysis preflight failure still occurs before a claim and does
+not consume a database attempt.
+
 Ctrl+C and supported termination signals set a shared stop event. Idle and
 backoff waits wake immediately, neither loop starts another job after observing
 shutdown, in-flight work is allowed to finish safely, and both pipelines close
@@ -70,6 +87,12 @@ The speech extra intentionally constrains PyAV to `>=11,<19`: the current
 Faster-Whisper integration uses an `av.open` API that is incompatible with
 PyAV 19. This is a compatibility constraint, not a security downgrade; do not
 remove it until upstream compatibility has been verified.
+
+Faster-Whisper remains responsible for multilingual transcription and language
+detection. The worker stores a normalized language code only when the model's
+reported detection probability is at least 0.80 and the metadata is valid. It
+stores no language code when confidence is weaker or metadata is unreliable;
+it never substitutes English merely because detection was uncertain.
 
 The free model may download at initial startup; private recordings are not
 sent to any transcription API or hosted LLM. A local worker processes only

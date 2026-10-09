@@ -22,10 +22,18 @@ from .analysis_worker import (
 )
 from .core import Gateway, Settings, WorkerError, process_one
 from .ollama import OllamaAnalyzer, OllamaSettings
-from .transcriber import FasterWhisperTranscriber
+from .transcriber import FasterWhisperTranscriber, TranscriptionStartupError
 
 
 LOG = logging.getLogger("callscope_worker.supervisor")
+
+
+class PipelineStartupError(Exception):
+    """Safe prerequisite/configuration failure for one supervised pipeline."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
 
 
 class PipelineRuntime(Protocol):
@@ -70,9 +78,17 @@ class _TranscriptionRuntime:
 
     @classmethod
     def open(cls) -> "_TranscriptionRuntime":
-        settings = Settings.from_env()
+        try:
+            settings = Settings.from_env()
+        except ValueError as exc:
+            raise PipelineStartupError("worker_configuration_invalid") from exc
+
         # Model and media prerequisites are loaded before any job can be claimed.
-        transcriber = FasterWhisperTranscriber(settings.model)
+        try:
+            transcriber = FasterWhisperTranscriber(settings.model)
+        except TranscriptionStartupError as exc:
+            raise PipelineStartupError(exc.code) from exc
+
         return cls(Gateway(settings), transcriber)
 
     def process_one(self) -> bool:
@@ -96,8 +112,16 @@ class _AnalysisRuntime:
 
     @classmethod
     def open(cls, *, heartbeat_interval_seconds: float) -> "_AnalysisRuntime":
-        supabase_settings = Settings.from_env()
-        ollama_settings = OllamaSettings.from_env()
+        try:
+            supabase_settings = Settings.from_env()
+        except ValueError as exc:
+            raise PipelineStartupError("worker_configuration_invalid") from exc
+
+        try:
+            ollama_settings = OllamaSettings.from_env()
+        except ValueError as exc:
+            raise PipelineStartupError("analysis_configuration_invalid") from exc
+
         gateway = AnalysisGateway(supabase_settings)
         try:
             analyzer = OllamaAnalyzer(ollama_settings)
@@ -165,6 +189,17 @@ def run_pipeline(spec: PipelineSpec, config: LoopConfig, stop: StopSignal) -> No
                     runtime = spec.open_runtime()
                     backoff_seconds = config.initial_backoff_seconds
                     LOG.info("Pipeline ready: pipeline=%s", spec.name)
+                except PipelineStartupError as exc:
+                    backoff_seconds, stopped = _wait_after_failure(
+                        name=spec.name,
+                        code=exc.code,
+                        backoff_seconds=backoff_seconds,
+                        config=config,
+                        stop=stop,
+                    )
+                    if stopped:
+                        break
+                    continue
                 except (ValueError, RuntimeError):
                     backoff_seconds, stopped = _wait_after_failure(
                         name=spec.name,

@@ -70,6 +70,11 @@ type AnalysisDetail = {
   completedAt: string | null;
 };
 
+type ProcessingStage = {
+  label: string;
+  tone: "queued" | "processing" | "completed" | "failed";
+};
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -320,8 +325,66 @@ function formatDuration(
     : `${seconds}s`;
 }
 
-function statusLabel(status: string) {
-  return status.replaceAll("_", " ");
+function uploadStatusLabel(status: string) {
+  const labels: Record<string, string> = {
+    pending_upload: "Upload pending",
+    uploaded: "Upload complete",
+    processing: "Upload processing",
+    completed: "Upload complete",
+    failed: "Upload failed",
+  };
+
+  return labels[status] ?? "Upload status unavailable";
+}
+
+function processingStage(
+  call: CallDetail,
+  transcription: TranscriptionDetail | null,
+  transcriptionUnavailable: boolean,
+  analysis: AnalysisDetail | null,
+  analysisUnavailable: boolean,
+): ProcessingStage {
+  if (call.status === "pending_upload") {
+    return { label: "Uploading", tone: "processing" };
+  }
+
+  if (call.status === "failed") {
+    return { label: "Upload failed", tone: "failed" };
+  }
+
+  if (transcriptionUnavailable) {
+    return { label: "Status unavailable", tone: "failed" };
+  }
+
+  if (!transcription || transcription.status === "queued") {
+    return { label: "Waiting for transcription", tone: "queued" };
+  }
+
+  if (transcription.status === "processing") {
+    return { label: "Transcribing", tone: "processing" };
+  }
+
+  if (transcription.status === "failed") {
+    return { label: "Transcription failed", tone: "failed" };
+  }
+
+  if (analysisUnavailable) {
+    return { label: "Analysis status unavailable", tone: "failed" };
+  }
+
+  if (!analysis || analysis.status === "queued") {
+    return { label: "Waiting for AI analysis", tone: "queued" };
+  }
+
+  if (analysis.status === "processing") {
+    return { label: "Analyzing", tone: "processing" };
+  }
+
+  if (analysis.status === "failed") {
+    return { label: "Analysis failed", tone: "failed" };
+  }
+
+  return { label: "Finished", tone: "completed" };
 }
 
 function TranscriptionPanel({
@@ -349,9 +412,10 @@ function TranscriptionPanel({
   if (!transcription) {
     return (
       <div className="transcript-state">
-        <h2>Transcription not queued</h2>
+        <h2>Waiting for transcription</h2>
         <p>
-          No transcription record is available for this call yet.
+          The upload is complete, but transcription has not been queued yet.
+          Keep the local CallScope worker running.
         </p>
       </div>
     );
@@ -362,8 +426,7 @@ function TranscriptionPanel({
       <div className="transcript-state">
         <h2>Queued for transcription</h2>
         <p>
-          A trusted local worker can process this recording
-          while it is running.
+          This recording is waiting for the local CallScope worker.
         </p>
       </div>
     );
@@ -377,7 +440,7 @@ function TranscriptionPanel({
       >
         <h2>Transcription in progress</h2>
         <p>
-          The recording is currently held by a trusted worker lease.
+          The local worker is transcribing this recording.
         </p>
       </div>
     );
@@ -391,8 +454,9 @@ function TranscriptionPanel({
       >
         <h2>Transcription failed</h2>
         <p>
-          The recording could not be transcribed.
-          Internal worker details remain private.
+          Transcription could not finish. Ask the local worker operator to
+          check the recording and safe worker logs. Manual retry is not
+          available in the browser.
         </p>
       </div>
     );
@@ -406,11 +470,11 @@ function TranscriptionPanel({
           <h2>Completed transcription</h2>
         </div>
 
-        {transcription.languageCode && (
-          <span className="call-count">
-            {transcription.languageCode}
-          </span>
-        )}
+        <span className="call-count">
+          {transcription.languageCode
+            ? `Language: ${transcription.languageCode}`
+            : "Language not confidently detected"}
+        </span>
       </div>
 
       <p className="transcript-text">
@@ -455,9 +519,11 @@ function InsightList({
 function AnalysisPanel({
   analysis,
   unavailable,
+  transcriptionStatus,
 }: {
   analysis: AnalysisDetail | null;
   unavailable: boolean;
+  transcriptionStatus: TranscriptionDetail["status"] | null;
 }) {
   if (unavailable) {
     return (
@@ -480,16 +546,24 @@ function AnalysisPanel({
   }
 
   if (!analysis) {
+    const transcriptCompleted = transcriptionStatus === "completed";
+
     return (
       <div className="insights-state">
         <p className="eyebrow">
           AI Insights
         </p>
 
-        <h2>Analysis not queued</h2>
+        <h2>
+          {transcriptCompleted
+            ? "Waiting for AI analysis"
+            : "Waiting for transcript"}
+        </h2>
 
         <p>
-          Analysis waits for a valid completed transcript.
+          {transcriptCompleted
+            ? "The transcript is ready, but analysis has not been queued yet. Keep the local CallScope worker and Ollama running."
+            : "AI analysis begins only after transcription completes successfully."}
         </p>
       </div>
     );
@@ -505,11 +579,10 @@ function AnalysisPanel({
           AI Insights
         </p>
 
-        <h2>Queued for analysis</h2>
+        <h2>Queued for AI analysis</h2>
 
         <p>
-          The trusted local analysis worker will process this job
-          while it is running.
+          This transcript is waiting for the local CallScope worker and Ollama.
         </p>
       </div>
     );
@@ -528,7 +601,7 @@ function AnalysisPanel({
         <h2>Analysis in progress</h2>
 
         <p>
-          A trusted analysis worker currently holds this job.
+          The local worker is generating structured insights.
         </p>
       </div>
     );
@@ -547,8 +620,9 @@ function AnalysisPanel({
         <h2>Analysis failed</h2>
 
         <p>
-          The call could not be analysed.
-          Internal worker details remain private.
+          The transcript remains available, but AI analysis could not finish.
+          Ask the local worker operator to check Ollama and safe worker logs.
+          Manual retry is not available in the browser.
         </p>
       </div>
     );
@@ -786,6 +860,14 @@ export default async function CallDetailPage({
       )
     );
 
+  const currentStage = processingStage(
+    call,
+    transcription,
+    transcriptionUnavailable,
+    analysis,
+    analysisUnavailable,
+  );
+
   return (
     <>
       <CallStatusAutoRefresh
@@ -829,22 +911,25 @@ export default async function CallDetailPage({
 
               <span
                 className={
-                  `call-status ${call.status}`
+                  `call-status ${currentStage.tone}`
                 }
               >
-                {statusLabel(
-                  call.status,
-                )}
+                {currentStage.label}
               </span>
             </header>
 
             <dl className="call-metadata">
               <div>
+                <dt>Current stage</dt>
+                <dd>
+                  {currentStage.label}
+                </dd>
+              </div>
+
+              <div>
                 <dt>Upload state</dt>
                 <dd>
-                  {statusLabel(
-                    call.status,
-                  )}
+                  {uploadStatusLabel(call.status)}
                 </dd>
               </div>
 
@@ -864,24 +949,6 @@ export default async function CallDetailPage({
                     call.uploadCompletedAt ??
                     call.createdAt,
                   )}
-                </dd>
-              </div>
-
-              <div>
-                <dt>
-                  Transcription state
-                </dt>
-
-                <dd>
-                  {
-                    transcriptionUnavailable
-                      ? "unavailable"
-                      : transcription
-                        ? statusLabel(
-                            transcription.status,
-                          )
-                        : "not queued"
-                  }
                 </dd>
               </div>
             </dl>
@@ -908,6 +975,9 @@ export default async function CallDetailPage({
                 analysis={analysis}
                 unavailable={
                   analysisUnavailable
+                }
+                transcriptionStatus={
+                  transcription?.status ?? null
                 }
               />
             </section>

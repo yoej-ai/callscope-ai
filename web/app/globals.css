@@ -189,7 +189,7 @@ h1, h2, h3, p { margin-top: 0; }
 .call-status { background: var(--paper); border-radius: 999px; display: inline-block; font-size: .72rem; font-weight: 800; padding: 6px 9px; text-transform: capitalize; }
 .call-status.uploaded, .call-status.completed { background: #edf4db; color: var(--forest-dark); }
 .call-status.failed { background: #fff0eb; color: #8f2f19; }
-.call-status.processing { background: #fff4cd; color: #6c5011; }
+.call-status.pending_upload, .call-status.queued, .call-status.processing { background: #fff4cd; color: #6c5011; }
 .call-list-message { border-top: 1px solid var(--line); display: grid; gap: 6px; margin-top: 20px; padding: 24px 0 4px; }
 .call-list-message span { color: var(--muted); }
 .call-list-message.error strong { color: #8f2f19; }
