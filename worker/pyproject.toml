@@ -16,6 +16,7 @@ speech = ["faster-whisper>=1.1,<2.0", "av>=11,<19"]
 dev = ["pytest>=8.4,<10.0"]
 
 [project.scripts]
+callscope-worker = "callscope_worker.supervisor:main"
 callscope-transcribe = "callscope_worker.cli:main"
 callscope-analyze = "callscope_worker.analysis_cli:main"
 
