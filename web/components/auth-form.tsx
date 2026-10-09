@@ -1,10 +1,36 @@
+"use client";
+
 import Link from "next/link";
+import { useFormStatus } from "react-dom";
 
 type AuthFormProps = {
   mode: "sign-in" | "sign-up";
   message?: string;
   action: (formData: FormData) => Promise<void>;
 };
+
+function AuthSubmitButton({ isSignIn }: { isSignIn: boolean }) {
+  const { pending } = useFormStatus();
+
+  const label = isSignIn
+    ? pending
+      ? "Signing in..."
+      : "Sign in"
+    : pending
+      ? "Creating account..."
+      : "Create account";
+
+  return (
+    <button
+      aria-busy={pending}
+      className="button primary"
+      disabled={pending}
+      type="submit"
+    >
+      {label}
+    </button>
+  );
+}
 
 export function AuthForm({ mode, message, action }: AuthFormProps) {
   const isSignIn = mode === "sign-in";
@@ -48,9 +74,7 @@ export function AuthForm({ mode, message, action }: AuthFormProps) {
             required
             type="password"
           />
-          <button className="button primary" type="submit">
-            {isSignIn ? "Sign in" : "Create account"}
-          </button>
+          <AuthSubmitButton isSignIn={isSignIn} />
         </form>
 
         <p className="auth-switch">
