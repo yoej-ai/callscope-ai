@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from time import monotonic
 from typing import Annotated, Any, Protocol
@@ -45,15 +45,27 @@ class JwksCache:
         jwks_url: str,
         *,
         cache_ttl_seconds: float = 600.0,
+        unknown_kid_refresh_cooldown_seconds: float = 30.0,
         timeout_seconds: float = 5.0,
         transport: httpx.AsyncBaseTransport | None = None,
+        clock: Callable[[], float] = monotonic,
     ) -> None:
+        if cache_ttl_seconds <= 0:
+            raise ValueError("JWKS cache TTL must be positive")
+        if unknown_kid_refresh_cooldown_seconds <= 0:
+            raise ValueError("Unknown-key refresh cooldown must be positive")
+
         self._jwks_url = jwks_url
         self._cache_ttl_seconds = cache_ttl_seconds
+        self._unknown_kid_refresh_cooldown_seconds = (
+            unknown_kid_refresh_cooldown_seconds
+        )
         self._timeout = httpx.Timeout(timeout_seconds)
         self._transport = transport
+        self._clock = clock
         self._keys: dict[str, Mapping[str, Any]] = {}
         self._expires_at = 0.0
+        self._next_unknown_kid_refresh_at = 0.0
         self._lock = asyncio.Lock()
 
     async def get_key(self, kid: str, algorithm: str) -> Any:
@@ -78,13 +90,21 @@ class JwksCache:
             raise InvalidAccessToken("Invalid signing key") from exc
 
     async def _get_cached_key(self, kid: str) -> Mapping[str, Any] | None:
-        if monotonic() >= self._expires_at:
+        if self._clock() >= self._expires_at:
             await self._refresh(force=False)
         return self._keys.get(kid)
 
     async def _refresh(self, *, force: bool) -> None:
         async with self._lock:
-            if not force and self._keys and monotonic() < self._expires_at:
+            now = self._clock()
+
+            if force:
+                if now < self._next_unknown_kid_refresh_at:
+                    return
+                self._next_unknown_kid_refresh_at = (
+                    now + self._unknown_kid_refresh_cooldown_seconds
+                )
+            elif self._keys and now < self._expires_at:
                 return
 
             try:
@@ -120,7 +140,7 @@ class JwksCache:
                 raise AuthenticationServiceUnavailable
 
             self._keys = parsed_keys
-            self._expires_at = monotonic() + self._cache_ttl_seconds
+            self._expires_at = self._clock() + self._cache_ttl_seconds
 
 
 class SupabaseJwtVerifier:

@@ -79,6 +79,8 @@ def build_test_client(
     signing_key: SigningKey,
     *,
     jwks_handler: Callable[[httpx.Request], httpx.Response] | None = None,
+    jwks_clock: Callable[[], float] | None = None,
+    unknown_kid_refresh_cooldown_seconds: float = 30.0,
     workspace_handler: Callable[[httpx.Request], httpx.Response] | None = None,
     upload_handler: Callable[[httpx.Request], httpx.Response] | None = None,
 ) -> TestClient:
@@ -101,6 +103,10 @@ def build_test_client(
     jwks_cache = JwksCache(
         settings.supabase_jwks_url,
         transport=httpx.MockTransport(jwks_handler or default_jwks_handler),
+        unknown_kid_refresh_cooldown_seconds=(
+            unknown_kid_refresh_cooldown_seconds
+        ),
+        **({"clock": jwks_clock} if jwks_clock is not None else {}),
     )
     verifier = SupabaseJwtVerifier(settings, jwks_cache=jwks_cache)
     workspace_client = SupabaseWorkspaceClient(

@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 
-import { AnalysisAutoRefresh } from "@/components/analysis-auto-refresh";
+import { CallStatusAutoRefresh } from "@/components/call-status-auto-refresh";
 import { DashboardNav } from "@/components/dashboard-nav";
 import { isUuid } from "@/lib/api/types";
 import { createClient } from "@/lib/supabase/server";
@@ -770,17 +770,26 @@ export default async function CallDetailPage({
     );
   }
 
-  const shouldRefreshAnalysis =
-    !analysisUnavailable &&
+  const shouldRefreshCallStatus =
     (
-      analysis?.status === "queued" ||
-      analysis?.status === "processing"
+      !transcriptionUnavailable &&
+      (
+        transcription?.status === "queued" ||
+        transcription?.status === "processing"
+      )
+    ) ||
+    (
+      !analysisUnavailable &&
+      (
+        analysis?.status === "queued" ||
+        analysis?.status === "processing"
+      )
     );
 
   return (
     <>
-      <AnalysisAutoRefresh
-        active={shouldRefreshAnalysis}
+      <CallStatusAutoRefresh
+        active={shouldRefreshCallStatus}
       />
 
       <div className="dashboard-shell">
