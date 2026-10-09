@@ -3,15 +3,15 @@
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 
-type AnalysisAutoRefreshProps = {
+type CallStatusAutoRefreshProps = {
   active: boolean;
   intervalMs?: number;
 };
 
-export function AnalysisAutoRefresh({
+export function CallStatusAutoRefresh({
   active,
   intervalMs = 5000,
-}: AnalysisAutoRefreshProps) {
+}: CallStatusAutoRefreshProps) {
   const router = useRouter();
 
   useEffect(() => {

@@ -4,14 +4,18 @@ CallScope AI is a multi-user call-intelligence SaaS foundation for sales and
 support teams. It is designed to turn customer conversations into secure,
 searchable summaries, intent, sentiment, objections, scores, and action items.
 
-This repository currently contains the production-oriented V1 foundation,
-private tenant-authorized audio ingestion, deployed transcription and AI-analysis
-state machines, isolated local transcription and analysis workers, and a
-tenant-safe Call Detail experience. Secure transcription and AI analysis have
-both been proven end to end against the hosted Supabase project. Local AI analysis
-uses Ollama with Qwen3 4B Instruct and requires no paid model API for development
-and testing. Speaker diarization, billing, vector search, CRM integrations, and
-always-on production worker deployment remain future work.
+This repository contains the production-oriented V1 foundation, private
+tenant-authorized audio ingestion, transcription and AI-analysis state machines,
+isolated transcription and analysis workers, and a tenant-safe Call Detail
+experience. The source implements the complete upload, transcription, analysis,
+and structured-insights flow. Repository history records hosted end-to-end
+validation of both the secure transcription and AI-analysis paths; that evidence
+does not mean the local workers are always running or that an external hosted
+project's migration state remains continuously current. The workers are operated
+locally and manually. Local AI analysis uses Ollama with Qwen3 4B Instruct and
+requires no paid model API for development and testing. Speaker diarization,
+billing, vector search, CRM integrations, and always-on production worker
+deployment remain future work.
 
 ## Foundation scope
 
@@ -303,11 +307,13 @@ so a same-token retry after response loss is idempotent. Retryable failures wait
 five minutes and stop after three claims; only bounded machine-readable error
 codes are stored.
 
-The Phase 3A migration is deployed to the hosted Supabase project, whose migration
-history is aligned through `20261009000000_transcription_foundation.sql`. RLS is
-enabled on `call_transcriptions`; authenticated users can read only safe tenant
-transcript columns, while `claim_token` remains browser-hidden and mutation RPCs
-remain service-role-only.
+The recorded hosted Phase 3A validation confirmed that RLS was enabled on
+`call_transcriptions`, authenticated users could read only safe tenant transcript
+columns, `claim_token` remained browser-hidden, and mutation RPCs remained
+service-role-only. Later recorded hosted AI-analysis validation exercised the
+analysis foundation that follows this migration. Treat these as validation
+records rather than a continuously current statement about external deployment
+state.
 
 ### Trusted transcription worker
 
@@ -382,10 +388,10 @@ noise, return no score. A deterministic post-validation safeguard converts
 model-generated numeric scores to `null` only when the validated result itself
 contains no business intent, objections, action items, or topics.
 
-The Call Detail page renders queued, processing, failed, and completed analysis
-states using only tenant-safe columns. While analysis is queued or processing,
-the page refreshes periodically when visible so completed results can appear
-without a manual reload. Worker credentials never enter the browser.
+The Call Detail page renders queued, processing, failed, and completed states
+using only tenant-safe columns. While transcription or analysis is queued or
+processing, the page refreshes periodically when visible so completed results can
+appear without a manual reload. Worker credentials never enter the browser.
 
 ## Database overview
 
@@ -463,9 +469,12 @@ For a hosted project, link the CLI to the intended project and review the target
 before running `supabase db push`. The migration changes authentication triggers,
 grants, and RLS policies, so apply it first in a non-production environment.
 
-The current hosted CallScope project is aligned through
-`20261009000000_transcription_foundation.sql`. For any other environment, verify
-its migration history and target independently before applying changes.
+The repository contains versioned migrations through
+`20261010000000_ai_analysis_foundation.sql`. Repository history records hosted
+end-to-end validation of both transcription and AI analysis, but hosted project
+state is external to this source tree and may change. Verify the live migration
+history and target independently before applying changes; do not infer current
+deployment state from this README alone.
 
 Manual hosted-project steps:
 
@@ -482,6 +491,7 @@ Frontend:
 ```bash
 cd web
 npm ci
+npm test
 npm run lint
 npm run typecheck
 npm run build

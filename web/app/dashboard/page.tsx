@@ -328,8 +328,8 @@ export default async function DashboardPage({
           </form>
         </section>
         <p className="lede">
-          Securely upload and transcribe call recordings. AI analysis is the next
-          capability and is not processing calls yet.
+          Securely upload call recordings for transcription, AI analysis, and
+          structured insights.
         </p>
         <div className="dashboard-content">
           <CallUpload workspaceId={activeWorkspace.id} />

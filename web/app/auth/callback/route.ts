@@ -1,15 +1,15 @@
 import { NextResponse, type NextRequest } from "next/server";
 
+import { resolveSafeAuthRedirect } from "@/lib/auth/redirect-target.mjs";
 import { createClient } from "@/lib/supabase/server";
 
 export async function GET(request: NextRequest) {
   const requestUrl = new URL(request.url);
   const code = requestUrl.searchParams.get("code");
-  const requestedNext = requestUrl.searchParams.get("next") ?? "/dashboard";
-  const next =
-    requestedNext.startsWith("/") && !requestedNext.startsWith("//")
-      ? requestedNext
-      : "/dashboard";
+  const redirectUrl = resolveSafeAuthRedirect(
+    requestUrl,
+    requestUrl.searchParams.get("next"),
+  );
 
   if (!code) {
     return NextResponse.redirect(
@@ -26,5 +26,5 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  return NextResponse.redirect(new URL(next, request.url));
+  return NextResponse.redirect(redirectUrl);
 }
