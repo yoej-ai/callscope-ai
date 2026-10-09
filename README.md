@@ -5,12 +5,13 @@ support teams. It is designed to turn customer conversations into secure,
 searchable summaries, intent, sentiment, objections, scores, and action items.
 
 This repository currently contains the production-oriented V1 foundation,
-private tenant-authorized audio ingestion, a deployed transcription state
-machine, and an isolated local transcription worker. Secure transcription has
-been proven end to end against the hosted Supabase project. Phase 4A adds the
-secure state, result contract, and tenant-safe UI foundation for AI call analysis;
-an actual analysis engine, speaker diarization, billing, and CRM integrations are
-not implemented yet.
+private tenant-authorized audio ingestion, deployed transcription and AI-analysis
+state machines, isolated local transcription and analysis workers, and a
+tenant-safe Call Detail experience. Secure transcription and AI analysis have
+both been proven end to end against the hosted Supabase project. Local AI analysis
+uses Ollama with Qwen3 4B Instruct and requires no paid model API for development
+and testing. Speaker diarization, billing, vector search, CRM integrations, and
+always-on production worker deployment remain future work.
 
 ## Foundation scope
 
@@ -28,8 +29,10 @@ not implemented yet.
 - User-triggered recovery for interrupted and stale pending uploads
 - RLS-protected transcript state and worker-only claim/lease/retry RPCs
 - Isolated local CPU worker using free Faster-Whisper transcription
-- Tenant-safe server-rendered call detail and transcript views
-- Bounded AI-analysis state, worker RPC boundary, and tenant-safe insights UI
+- Isolated local Ollama analysis worker using Qwen3 4B Instruct
+- Strict schema-constrained AI results with prompt-injection hardening
+- Tenant-safe server-rendered call detail, transcript, and AI-insights views
+- Bounded AI-analysis state, worker RPC boundary, and live queued/processing refresh
 - Frontend, backend, worker, and database-security CI jobs
 
 ## Architecture
@@ -345,29 +348,44 @@ Browser upload → authenticated FastAPI ingestion → private Supabase Storage
 This validation proves the functional and security path; it is not a claim of an
 always-on or production-scale transcription deployment.
 
-### Secure AI-analysis foundation
+### Secure AI analysis
 
-Phase 4A automatically queues one analysis job only after a valid transcription
-is completed. The database enforces a provider-independent result contract for a
-bounded summary, sentiment, primary intent, objections, action items, topics, and
-an optional 0–100 overall score. Tenant members can select only safe result and
-status columns through RLS; claim tokens, leases, attempts, retry timing, and
-internal error codes remain hidden.
+Phase 4A established the analysis state machine and automatically queues one
+analysis job only after a valid transcription is completed. The database enforces
+a bounded result contract for summary, sentiment, primary intent, objections,
+action items, topics, and an optional 0–100 engagement/opportunity score. Tenant
+members can select only safe result and status columns through RLS; claim tokens,
+leases, attempts, retry timing, and internal error codes remain hidden.
 
-The future analysis worker boundary uses service-role-only `SECURITY DEFINER`
-RPCs for bounded oldest-first claims, fixed wall-clock leases, token-protected
-completion, and capped retries. The Call Detail page renders queued, processing,
-failed, and completed states through the existing authenticated Supabase server
-client and never receives worker credentials.
+Phase 4B adds the isolated trusted analysis worker. It uses local Ollama with
+Qwen3 4B Instruct, claims work only through the existing service-role-only
+`SECURITY DEFINER` RPC boundary, renews active leases while inference runs, and
+persists only locally validated structured fields. The model receives no
+Supabase credential, files, database access, browser session, external tools, or
+network-capable tool interface.
 
-Transcript text is untrusted data. A future analysis worker must never interpret
-caller speech as system or developer instructions, reveal secrets or tools in
-response to transcript content, or persist hidden reasoning, raw prompts, or raw
-provider responses. It must validate model output against the bounded database
-contract before completion.
+Transcript text is always treated as untrusted data rather than instructions.
+The system prompt explicitly excludes analyzer-directed commands and
+prompt-injection content from business analysis. Thinking is disabled, tool use
+is absent, the response is constrained by a closed JSON schema, and the worker
+never stores raw model responses or hidden reasoning.
 
-Phase 4A does **not** implement AI inference. It adds no model provider, paid API,
-or LLM dependency, and no analysis end-to-end success is claimed.
+Phase 4C strengthens reliability before database claims. The worker performs a
+local Ollama/model preflight before claiming a job so a stopped Ollama process or
+missing configured model does not consume an analysis attempt. Normal INFO logs
+from `httpx` and `httpcore` are suppressed to avoid unnecessary request metadata.
+
+The `overall_score` is defined as an engagement/opportunity score rather than a
+sentiment score. Genuine business conversations retain bounded 0–100 scores,
+while transcripts with no genuine business intent, such as workflow tests or
+noise, return no score. A deterministic post-validation safeguard converts
+model-generated numeric scores to `null` only when the validated result itself
+contains no business intent, objections, action items, or topics.
+
+The Call Detail page renders queued, processing, failed, and completed analysis
+states using only tenant-safe columns. While analysis is queued or processing,
+the page refreshes periodically when visible so completed results can appear
+without a manual reload. Worker credentials never enter the browser.
 
 ## Database overview
 
@@ -501,26 +519,30 @@ at release `v3.0.1` and pins Supabase CLI `2.119.0` rather than floating on late
 - FastAPI integration is server-side; browsers do not manually receive its bearer
   token through rendered props or client state
 - JWKS and workspace reads require the configured Supabase service to be reachable
-- analysis mutation is restricted to the future service-role-only worker RPCs;
-  no analysis worker or model provider is implemented yet
+- analysis mutation remains restricted to service-role-only worker RPCs;
+  the local Ollama worker has no direct table mutation grant
 - raw usage events have no browser access; no aggregate usage API exists yet
 - byte-level media validation occurs in the trusted worker, not at browser upload
 - stale reconciliation is user-triggered and bounded; automatic scheduling and
   trusted deletion of invalid or orphaned Storage objects remain deferred
 - the transcription worker is local/manual and processes jobs only while its
   machine is running; no always-on cloud or production-scale worker exists
-- AI Call Analysis & Insights has a secure state/UI foundation only; actual AI
-  inference, speaker diarization, vector search, billing, and CRM integrations
-  are not implemented
+- AI Call Analysis & Insights runs through the local Ollama worker; speaker
+  diarization, vector search, billing, CRM integrations, and always-on cloud
+  inference are not implemented
 - the default Whisper `tiny` model can misrecognize proper names or language
   labels; this is a model-quality limitation rather than a pipeline failure
 
 ## Recommended next phase
 
-Phase 4B should add an isolated, provider-agnostic analysis engine that treats
-transcripts as untrusted data and produces only the validated structured contract
-through the worker-only RPCs. It must not weaken the existing RLS, private
-Storage, transcription, or claim-token boundaries. No provider has been selected,
-and free/local options should be evaluated before any paid service. Speaker
-diarization and production always-on worker deployment remain separate future work.
+After Phase 4C reliability hardening, the next product phase should focus on
+running the completed transcription and analysis pipeline as a more usable SaaS
+workflow without weakening the existing tenant, RLS, private Storage, and
+claim-token boundaries. Candidate work includes an explicit worker-operation
+strategy, broader end-to-end product validation, improved transcription language
+quality, and product-level insights workflows.
+
+Speaker diarization, vector search, billing, CRM integrations, and always-on
+production worker deployment remain separate future phases. Paid model services
+are not required for the current local development and validation path.
 

@@ -17,6 +17,22 @@ from .ollama import OllamaAnalyzer, OllamaSettings
 LOG = logging.getLogger("callscope_worker.analysis")
 
 
+def configure_logging() -> None:
+    """Configure safe worker logging.
+
+    CallScope logs remain visible at INFO while HTTP client internals are kept
+    at WARNING to avoid unnecessary request metadata in normal worker output.
+    """
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(levelname)s %(message)s",
+    )
+
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="CallScope AI trusted local analysis worker"
@@ -44,10 +60,7 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(levelname)s %(message)s",
-    )
+    configure_logging()
 
     if not 5 <= args.poll_seconds <= 300:
         parser.error(
@@ -102,8 +115,10 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     except AnalysisWorkerError as exc:
+        # Log only the worker's bounded machine-readable code. Never include
+        # wrapped HTTP/model exception details.
         LOG.error(
-            "Analysis worker cannot access queue: %s",
+            "Analysis worker stopped: code=%s",
             exc.code,
         )
         return 1

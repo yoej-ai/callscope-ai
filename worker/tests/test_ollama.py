@@ -47,7 +47,9 @@ def settings() -> OllamaSettings:
         "http://127.0.0.1:11434/#fragment",
     ],
 )
-def test_settings_reject_nonlocal_or_unsafe_ollama_origins(base_url: str) -> None:
+def test_settings_reject_nonlocal_or_unsafe_ollama_origins(
+    base_url: str,
+) -> None:
     with pytest.raises(ValueError):
         OllamaSettings(base_url=base_url, model=MODEL)
 
@@ -59,7 +61,9 @@ def test_settings_reject_nonlocal_or_unsafe_ollama_origins(base_url: str) -> Non
         "http://localhost:11434",
     ],
 )
-def test_settings_accept_local_ollama_origins(base_url: str) -> None:
+def test_settings_accept_local_ollama_origins(
+    base_url: str,
+) -> None:
     value = OllamaSettings(base_url=base_url, model=MODEL)
 
     assert value.base_url == base_url
@@ -75,12 +79,131 @@ def test_settings_accept_local_ollama_origins(base_url: str) -> None:
         "model\ninjection",
     ],
 )
-def test_settings_reject_unsafe_model_identifiers(model: str) -> None:
+def test_settings_reject_unsafe_model_identifiers(
+    model: str,
+) -> None:
     with pytest.raises(ValueError):
         OllamaSettings(
             base_url="http://127.0.0.1:11434",
             model=model,
         )
+
+
+def test_preflight_confirms_configured_model_before_analysis() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+
+        assert request.method == "GET"
+        assert request.url.path == "/api/tags"
+
+        return httpx.Response(
+            200,
+            json={
+                "models": [
+                    {
+                        "name": MODEL,
+                        "model": MODEL,
+                    }
+                ]
+            },
+        )
+
+    with httpx.Client(
+        base_url="http://127.0.0.1:11434/",
+        transport=httpx.MockTransport(handler),
+        trust_env=False,
+        follow_redirects=False,
+    ) as http:
+        analyzer = OllamaAnalyzer(settings(), http=http)
+        analyzer.preflight()
+
+    assert len(seen) == 1
+
+
+def test_preflight_rejects_missing_configured_model() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "models": [
+                    {
+                        "name": "another-model:latest",
+                        "model": "another-model:latest",
+                    }
+                ]
+            },
+        )
+
+    with httpx.Client(
+        base_url="http://127.0.0.1:11434/",
+        transport=httpx.MockTransport(handler),
+        trust_env=False,
+        follow_redirects=False,
+    ) as http:
+        analyzer = OllamaAnalyzer(settings(), http=http)
+
+        with pytest.raises(OllamaError) as error:
+            analyzer.preflight()
+
+    assert error.value.code == "ollama_model_unavailable"
+    assert error.value.retryable is False
+
+
+def test_preflight_fails_closed_when_ollama_is_unavailable() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError(
+            "PRIVATE CONNECTION DETAIL",
+            request=request,
+        )
+
+    with httpx.Client(
+        base_url="http://127.0.0.1:11434/",
+        transport=httpx.MockTransport(handler),
+        trust_env=False,
+        follow_redirects=False,
+    ) as http:
+        analyzer = OllamaAnalyzer(settings(), http=http)
+
+        with pytest.raises(OllamaError) as error:
+            analyzer.preflight()
+
+    assert error.value.code == "ollama_unavailable"
+    assert error.value.retryable is True
+    assert "PRIVATE CONNECTION DETAIL" not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        httpx.Response(200, text="not-json"),
+        httpx.Response(200, json=[]),
+        httpx.Response(200, json={}),
+        httpx.Response(200, json={"models": "invalid"}),
+        httpx.Response(200, json={"models": [None]}),
+    ],
+)
+def test_preflight_rejects_invalid_response_without_leaking_body(
+    response: httpx.Response,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return response
+
+    with httpx.Client(
+        base_url="http://127.0.0.1:11434/",
+        transport=httpx.MockTransport(handler),
+        trust_env=False,
+        follow_redirects=False,
+    ) as http:
+        analyzer = OllamaAnalyzer(settings(), http=http)
+
+        with pytest.raises(OllamaError) as error:
+            analyzer.preflight()
+
+    assert error.value.code == "ollama_preflight_invalid"
+    assert error.value.retryable is True
+    assert "not-json" not in str(error.value)
 
 
 def test_analyzer_sends_closed_local_request_without_tools_or_secrets() -> None:
@@ -236,6 +359,7 @@ def test_analyzer_rejects_empty_or_oversized_transcript_before_http_call() -> No
 
     assert calls == 0
 
+
 def test_system_prompt_requires_ignoring_injected_meta_instructions() -> None:
     from callscope_worker.ollama import SYSTEM_PROMPT
 
@@ -245,3 +369,27 @@ def test_system_prompt_requires_ignoring_injected_meta_instructions() -> None:
     assert "analysis" in prompt
     assert "instructions" in prompt
     assert "business" in prompt
+
+
+def test_system_prompt_defines_overall_score_contract() -> None:
+    from callscope_worker.ollama import SYSTEM_PROMPT
+
+    prompt = SYSTEM_PROMPT.lower()
+
+    assert "overall_score" in prompt
+    assert "engagement" in prompt
+    assert "opportunity" in prompt
+
+    assert "0-20" in prompt
+    assert "21-40" in prompt
+    assert "41-60" in prompt
+    assert "61-80" in prompt
+    assert "81-100" in prompt
+
+    assert "null" in prompt
+    assert "insufficient" in prompt
+    assert "test" in prompt
+    assert "noise" in prompt
+
+    assert "sentiment alone" in prompt
+    assert "do not invent" in prompt

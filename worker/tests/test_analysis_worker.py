@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -14,6 +13,7 @@ from callscope_worker.analysis_worker import (
     process_one_analysis,
 )
 from callscope_worker.core import Settings
+from callscope_worker.ollama import OllamaError
 
 
 CALL = "20000000-0000-0000-0000-000000000041"
@@ -218,8 +218,10 @@ class FakeAnalysisGateway:
         self.completed: list[AnalysisResult] = []
         self.failed: list[AnalysisWorkerError] = []
         self.renew_result = True
+        self.claim_calls = 0
 
     def claim(self) -> list[AnalysisJob]:
+        self.claim_calls += 1
         return [job()]
 
     def renew(self, item: AnalysisJob) -> bool:
@@ -245,10 +247,19 @@ class FakeAnalyzer:
     def __init__(
         self,
         *,
-        error: Exception | None = None,
+        preflight_error: Exception | None = None,
+        analysis_error: Exception | None = None,
     ) -> None:
-        self.error = error
+        self.preflight_error = preflight_error
+        self.analysis_error = analysis_error
+        self.preflight_calls = 0
         self.calls = 0
+
+    def preflight(self) -> None:
+        self.preflight_calls += 1
+
+        if self.preflight_error is not None:
+            raise self.preflight_error
 
     def analyze(
         self,
@@ -261,10 +272,51 @@ class FakeAnalyzer:
         assert transcript == "Customer asked about pricing."
         assert language == "en"
 
-        if self.error is not None:
-            raise self.error
+        if self.analysis_error is not None:
+            raise self.analysis_error
 
         return result()
+
+
+def test_analysis_worker_preflights_before_claiming_job() -> None:
+    gateway = FakeAnalysisGateway()
+    analyzer = FakeAnalyzer()
+
+    assert process_one_analysis(
+        gateway,
+        analyzer,
+        heartbeat_interval_seconds=3600,
+    ) is True
+
+    assert analyzer.preflight_calls == 1
+    assert gateway.claim_calls == 1
+    assert analyzer.calls == 1
+
+
+def test_analysis_worker_preflight_failure_does_not_claim_job() -> None:
+    gateway = FakeAnalysisGateway()
+    analyzer = FakeAnalyzer(
+        preflight_error=OllamaError(
+            "ollama_unavailable",
+            retryable=True,
+        )
+    )
+
+    with pytest.raises(AnalysisWorkerError) as error:
+        process_one_analysis(
+            gateway,
+            analyzer,
+            heartbeat_interval_seconds=3600,
+        )
+
+    assert error.value.code == "ollama_unavailable"
+    assert error.value.retryable is True
+
+    assert analyzer.preflight_calls == 1
+    assert gateway.claim_calls == 0
+    assert analyzer.calls == 0
+    assert gateway.completed == []
+    assert gateway.failed == []
 
 
 def test_analysis_worker_completes_validated_result() -> None:
@@ -277,6 +329,7 @@ def test_analysis_worker_completes_validated_result() -> None:
         heartbeat_interval_seconds=3600,
     ) is True
 
+    assert analyzer.preflight_calls == 1
     assert analyzer.calls == 1
     assert gateway.failed == []
     assert len(gateway.completed) == 1
@@ -284,11 +337,9 @@ def test_analysis_worker_completes_validated_result() -> None:
 
 
 def test_analysis_worker_reports_safe_retryable_model_failure() -> None:
-    from callscope_worker.ollama import OllamaError
-
     gateway = FakeAnalysisGateway()
     analyzer = FakeAnalyzer(
-        error=OllamaError(
+        analysis_error=OllamaError(
             "ollama_unavailable",
             retryable=True,
         )
@@ -300,6 +351,8 @@ def test_analysis_worker_reports_safe_retryable_model_failure() -> None:
         heartbeat_interval_seconds=3600,
     ) is True
 
+    assert analyzer.preflight_calls == 1
+    assert gateway.claim_calls == 1
     assert gateway.completed == []
     assert len(gateway.failed) == 1
     assert gateway.failed[0].code == "ollama_unavailable"
@@ -308,7 +361,12 @@ def test_analysis_worker_reports_safe_retryable_model_failure() -> None:
 
 def test_analysis_worker_returns_false_when_queue_is_empty() -> None:
     gateway = FakeAnalysisGateway()
-    gateway.claim = lambda: []
+
+    def empty_claim() -> list[AnalysisJob]:
+        gateway.claim_calls += 1
+        return []
+
+    gateway.claim = empty_claim
 
     analyzer = FakeAnalyzer()
 
@@ -318,6 +376,8 @@ def test_analysis_worker_returns_false_when_queue_is_empty() -> None:
         heartbeat_interval_seconds=3600,
     ) is False
 
+    assert analyzer.preflight_calls == 1
+    assert gateway.claim_calls == 1
     assert analyzer.calls == 0
     assert gateway.completed == []
     assert gateway.failed == []
