@@ -268,12 +268,28 @@ select is(
   'reconciliation does not delete orphaned Storage objects'
 );
 
-select is(
-  (select count(*) from pg_policies
-   where schemaname = 'storage' and tablename = 'objects'
-     and policyname like 'call_audio_%' and cmd in ('SELECT', 'UPDATE', 'DELETE')),
-  0::bigint,
-  'reconciliation adds no browser Storage read, update, or delete policy'
+select ok(
+  not exists (
+    select 1 from pg_policies
+    where schemaname = 'storage' and tablename = 'objects'
+      and policyname like 'call_audio_%' and cmd = 'UPDATE'
+  )
+  and (select count(*) from pg_policies
+       where schemaname = 'storage' and tablename = 'objects'
+         and policyname like 'call_audio_%' and cmd = 'SELECT') = 1
+  and (select count(*) from pg_policies
+       where schemaname = 'storage' and tablename = 'objects'
+         and policyname = 'call_audio_select_managed_deleting_for_delete'
+         and cmd = 'SELECT'
+         and pg_catalog.lower(qual) like '%storage.allow_delete_query%') = 1
+  and (select count(*) from pg_policies
+       where schemaname = 'storage' and tablename = 'objects'
+         and policyname like 'call_audio_%' and cmd = 'DELETE') = 1
+  and (select count(*) from pg_policies
+       where schemaname = 'storage' and tablename = 'objects'
+         and policyname = 'call_audio_delete_managed_deleting'
+         and cmd = 'DELETE') = 1,
+  'reconciliation keeps Storage reads delete-transaction-only and deletion exact-object scoped'
 );
 
 select * from finish();

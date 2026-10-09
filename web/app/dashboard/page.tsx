@@ -7,7 +7,13 @@ import {
   getApiIdentity,
   getApiWorkspace,
 } from "@/lib/api/client";
+import {
+  callDisplayName,
+  callStatusLabel,
+  canManageCall,
+} from "@/lib/call-management.mjs";
 import { isUuid } from "@/lib/api/types";
+import { CallActions } from "@/components/call-actions";
 import { CallUpload } from "@/components/call-upload";
 import { DashboardNav } from "@/components/dashboard-nav";
 import {
@@ -32,11 +38,14 @@ const CALL_STATUSES = new Set([
   "processing",
   "completed",
   "failed",
+  "deleting",
 ]);
 
 type CallSummary = {
   id: string;
+  displayName: string | null;
   originalFilename: string;
+  uploadedBy: string | null;
   contentType: string | null;
   sizeBytes: number | null;
   status: string;
@@ -52,8 +61,14 @@ function parseCallSummary(value: unknown): CallSummary | null {
   const call = value as Record<string, unknown>;
   if (
     !isUuid(call.id) ||
+    (call.display_name !== null &&
+      (typeof call.display_name !== "string" ||
+        !call.display_name.trim() ||
+        call.display_name.length > 120 ||
+        /[\u0000-\u001f\u007f]/.test(call.display_name))) ||
     typeof call.original_filename !== "string" ||
     !call.original_filename.trim() ||
+    (call.uploaded_by !== null && !isUuid(call.uploaded_by)) ||
     (call.content_type !== null && typeof call.content_type !== "string") ||
     (call.size_bytes !== null &&
       (typeof call.size_bytes !== "number" ||
@@ -72,7 +87,9 @@ function parseCallSummary(value: unknown): CallSummary | null {
 
   return {
     id: call.id,
+    displayName: call.display_name,
     originalFilename: call.original_filename,
+    uploadedBy: call.uploaded_by,
     contentType: call.content_type,
     sizeBytes: call.size_bytes,
     status: call.status,
@@ -94,18 +111,6 @@ function formatDate(value: string) {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(value));
-}
-
-function uploadStatusLabel(status: string) {
-  const labels: Record<string, string> = {
-    pending_upload: "Upload pending",
-    uploaded: "Upload complete",
-    processing: "Upload processing",
-    completed: "Upload complete",
-    failed: "Upload failed",
-  };
-
-  return labels[status] ?? "Upload status unavailable";
 }
 
 function DashboardApiError({ email, kind }: DashboardApiErrorProps) {
@@ -283,10 +288,30 @@ export default async function DashboardPage({
     );
   }
 
+  const { data: activeMembership, error: membershipError } = await supabase
+    .from("workspace_members")
+    .select("role")
+    .eq("workspace_id", activeWorkspace.id)
+    .eq("user_id", user.id)
+    .maybeSingle();
+  const workspaceRole =
+    activeMembership?.role === "owner" ||
+    activeMembership?.role === "admin" ||
+    activeMembership?.role === "member"
+      ? activeMembership.role
+      : null;
+
+  if (membershipError) {
+    console.error("Unable to load active workspace membership", {
+      code: membershipError.code,
+      workspaceId: activeWorkspace.id,
+    });
+  }
+
   const { data: callRows, error: callError } = await supabase
     .from("calls")
     .select(
-      "id, original_filename, content_type, size_bytes, status, created_at, upload_completed_at",
+      "id, display_name, original_filename, uploaded_by, content_type, size_bytes, status, created_at, upload_completed_at",
     )
     .eq("workspace_id", activeWorkspace.id)
     .order("created_at", { ascending: false })
@@ -370,36 +395,61 @@ export default async function DashboardPage({
               </div>
             ) : (
               <ol className="call-list">
-                {calls.map((call) => (
-                  <li key={call.id} className="call-row">
-                    <div className="call-primary">
-                      <Link
-                        className="call-link"
-                        href={`/dashboard/calls/${encodeURIComponent(call.id)}`}
-                      >
-                        {call.originalFilename}
-                      </Link>
-                      <span>
-                        {formatSize(call.sizeBytes)}
-                        {call.contentType ? ` · ${call.contentType}` : ""}
-                      </span>
-                    </div>
-                    <div className="call-secondary">
-                      <span className={`call-status ${call.status}`}>
-                        {uploadStatusLabel(call.status)}
-                      </span>
-                      <time dateTime={call.uploadCompletedAt ?? call.createdAt}>
-                        {formatDate(call.uploadCompletedAt ?? call.createdAt)}
-                      </time>
-                      {call.status === "pending_upload" && (
-                        <PendingUploadRecovery
-                          callId={call.id}
-                          workspaceId={activeWorkspace.id}
-                        />
-                      )}
-                    </div>
-                  </li>
-                ))}
+                {calls.map((call) => {
+                  const displayName = callDisplayName(
+                    call.displayName,
+                    call.originalFilename,
+                  );
+                  const viewHref = `/dashboard/calls/${encodeURIComponent(call.id)}`;
+                  const manageable = canManageCall({
+                    currentUserId: user.id,
+                    uploadedBy: call.uploadedBy,
+                    workspaceRole,
+                  });
+
+                  return (
+                    <li key={call.id} className="call-row">
+                      <div className="call-primary">
+                        <Link className="call-link" href={viewHref}>
+                          {displayName}
+                        </Link>
+                        {call.displayName && (
+                          <span>Source: {call.originalFilename}</span>
+                        )}
+                        <span>
+                          {formatSize(call.sizeBytes)}
+                          {call.contentType ? ` · ${call.contentType}` : ""}
+                        </span>
+                      </div>
+                      <div className="call-secondary">
+                        <div className="call-row-controls">
+                          <span className={`call-status ${call.status}`}>
+                            {callStatusLabel(call.status)}
+                          </span>
+                          <CallActions
+                            callId={call.id}
+                            canManage={manageable}
+                            displayName={displayName}
+                            isDeleting={call.status === "deleting"}
+                            originalFilename={call.originalFilename}
+                            retryStage={null}
+                            viewHref={viewHref}
+                            workspaceId={activeWorkspace.id}
+                          />
+                        </div>
+                        <time dateTime={call.uploadCompletedAt ?? call.createdAt}>
+                          {formatDate(call.uploadCompletedAt ?? call.createdAt)}
+                        </time>
+                        {call.status === "pending_upload" && (
+                          <PendingUploadRecovery
+                            callId={call.id}
+                            workspaceId={activeWorkspace.id}
+                          />
+                        )}
+                      </div>
+                    </li>
+                  );
+                })}
               </ol>
             )}
           </section>

@@ -1,9 +1,16 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 
+import { CallActions } from "@/components/call-actions";
 import { CallStatusAutoRefresh } from "@/components/call-status-auto-refresh";
 import { DashboardNav } from "@/components/dashboard-nav";
 import { isUuid } from "@/lib/api/types";
+import {
+  callDisplayName,
+  callStatusLabel,
+  canManageCall,
+  retryableProcessingStage,
+} from "@/lib/call-management.mjs";
 import { humanizeDisplayLabel } from "@/lib/presentation/labels.mjs";
 import { createClient } from "@/lib/supabase/server";
 
@@ -17,6 +24,7 @@ const CALL_STATUSES = new Set([
   "processing",
   "completed",
   "failed",
+  "deleting",
 ]);
 
 const TRANSCRIPTION_STATUSES = new Set([
@@ -43,7 +51,9 @@ const SENTIMENTS = new Set([
 type CallDetail = {
   id: string;
   workspaceId: string;
+  displayName: string | null;
   originalFilename: string;
+  uploadedBy: string | null;
   status: string;
   durationSeconds: number | null;
   createdAt: string;
@@ -73,7 +83,7 @@ type AnalysisDetail = {
 
 type ProcessingStage = {
   label: string;
-  tone: "queued" | "processing" | "completed" | "failed";
+  tone: "queued" | "processing" | "completed" | "failed" | "deleting";
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -93,8 +103,14 @@ function parseCallDetail(
   if (
     value.id !== callId ||
     !isUuid(value.workspace_id) ||
+    (value.display_name !== null &&
+      (typeof value.display_name !== "string" ||
+        !value.display_name.trim() ||
+        value.display_name.length > 120 ||
+        /[\u0000-\u001f\u007f]/.test(value.display_name))) ||
     typeof value.original_filename !== "string" ||
     !value.original_filename.trim() ||
+    (value.uploaded_by !== null && !isUuid(value.uploaded_by)) ||
     typeof value.status !== "string" ||
     !CALL_STATUSES.has(value.status) ||
     (
@@ -117,7 +133,9 @@ function parseCallDetail(
   return {
     id: value.id,
     workspaceId: value.workspace_id,
+    displayName: value.display_name,
     originalFilename: value.original_filename,
+    uploadedBy: value.uploaded_by,
     status: value.status,
     durationSeconds: value.duration_seconds,
     createdAt: value.created_at,
@@ -326,18 +344,6 @@ function formatDuration(
     : `${seconds}s`;
 }
 
-function uploadStatusLabel(status: string) {
-  const labels: Record<string, string> = {
-    pending_upload: "Upload pending",
-    uploaded: "Upload complete",
-    processing: "Upload processing",
-    completed: "Upload complete",
-    failed: "Upload failed",
-  };
-
-  return labels[status] ?? "Upload status unavailable";
-}
-
 function processingStage(
   call: CallDetail,
   transcription: TranscriptionDetail | null,
@@ -345,6 +351,10 @@ function processingStage(
   analysis: AnalysisDetail | null,
   analysisUnavailable: boolean,
 ): ProcessingStage {
+  if (call.status === "deleting") {
+    return { label: "Deletion in progress", tone: "deleting" };
+  }
+
   if (call.status === "pending_upload") {
     return { label: "Uploading", tone: "processing" };
   }
@@ -766,7 +776,7 @@ export default async function CallDetailPage({
   } = await supabase
     .from("calls")
     .select(
-      "id, workspace_id, original_filename, status, duration_seconds, created_at, upload_completed_at",
+      "id, workspace_id, display_name, original_filename, uploaded_by, status, duration_seconds, created_at, upload_completed_at",
     )
     .eq("id", callId)
     .maybeSingle();
@@ -781,6 +791,26 @@ export default async function CallDetailPage({
     !call
   ) {
     notFound();
+  }
+
+  const { data: membershipRow, error: membershipError } = await supabase
+    .from("workspace_members")
+    .select("role")
+    .eq("workspace_id", call.workspaceId)
+    .eq("user_id", user.id)
+    .maybeSingle();
+  const workspaceRole =
+    membershipRow?.role === "owner" ||
+    membershipRow?.role === "admin" ||
+    membershipRow?.role === "member"
+      ? membershipRow.role
+      : null;
+
+  if (membershipError) {
+    console.error("Unable to load call workspace membership", {
+      code: membershipError.code,
+      workspaceId: call.workspaceId,
+    });
   }
 
   const {
@@ -864,18 +894,20 @@ export default async function CallDetailPage({
   }
 
   const shouldRefreshCallStatus =
-    (
-      !transcriptionUnavailable &&
+    call.status !== "deleting" && (
       (
-        transcription?.status === "queued" ||
-        transcription?.status === "processing"
-      )
-    ) ||
-    (
-      !analysisUnavailable &&
+        !transcriptionUnavailable &&
+        (
+          transcription?.status === "queued" ||
+          transcription?.status === "processing"
+        )
+      ) ||
       (
-        analysis?.status === "queued" ||
-        analysis?.status === "processing"
+        !analysisUnavailable &&
+        (
+          analysis?.status === "queued" ||
+          analysis?.status === "processing"
+        )
       )
     );
 
@@ -886,6 +918,18 @@ export default async function CallDetailPage({
     analysis,
     analysisUnavailable,
   );
+  const displayName = callDisplayName(call.displayName, call.originalFilename);
+  const manageable = canManageCall({
+    currentUserId: user.id,
+    uploadedBy: call.uploadedBy,
+    workspaceRole,
+  });
+  const retryStage = retryableProcessingStage({
+    callStatus: call.status,
+    transcriptionStatus: transcription?.status ?? null,
+    analysisStatus: analysis?.status ?? null,
+  });
+  const dashboardHref = `/dashboard?workspace=${encodeURIComponent(call.workspaceId)}`;
 
   return (
     <>
@@ -904,11 +948,7 @@ export default async function CallDetailPage({
         <main className="dashboard-main call-detail-main">
           <Link
             className="text-link back-link"
-            href={
-              `/dashboard?workspace=${encodeURIComponent(
-                call.workspaceId,
-              )}`
-            }
+            href={dashboardHref}
           >
             ← Back to dashboard
           </Link>
@@ -924,24 +964,39 @@ export default async function CallDetailPage({
                 </p>
 
                 <h1 id="call-detail-title">
-                  {call.originalFilename}
+                  {displayName}
                 </h1>
+                {call.displayName && (
+                  <p className="call-source-name">
+                    Source file: {call.originalFilename}
+                  </p>
+                )}
               </div>
 
-              <span
-                className={
-                  `call-status ${currentStage.tone}`
-                }
-              >
-                {currentStage.label}
-              </span>
+              <div className="call-detail-controls">
+                <span className={`call-status ${currentStage.tone}`}>
+                  {currentStage.label}
+                </span>
+                {manageable && (
+                  <CallActions
+                    afterDeleteHref={dashboardHref}
+                    callId={call.id}
+                    canManage={manageable}
+                    displayName={displayName}
+                    isDeleting={call.status === "deleting"}
+                    originalFilename={call.originalFilename}
+                    retryStage={retryStage}
+                    workspaceId={call.workspaceId}
+                  />
+                )}
+              </div>
             </header>
 
             <dl className="call-metadata">
               <div>
                 <dt>Upload state</dt>
                 <dd>
-                  {uploadStatusLabel(call.status)}
+                  {callStatusLabel(call.status)}
                 </dd>
               </div>
 
@@ -965,34 +1020,39 @@ export default async function CallDetailPage({
               </div>
             </dl>
 
-            <section
-              className="transcript-panel"
-              aria-label="Transcription"
-            >
-              <TranscriptionPanel
-                transcription={
-                  transcription
-                }
-                unavailable={
-                  transcriptionUnavailable
-                }
-              />
-            </section>
+            {call.status === "deleting" ? (
+              <section className="call-deletion-panel" aria-labelledby="deletion-title">
+                <p className="eyebrow">Secure deletion</p>
+                <h2 id="deletion-title">Finishing secure deletion...</h2>
+                <p>
+                  The call is no longer eligible for processing. Use Retry deletion
+                  from the actions menu if the previous removal did not finish.
+                </p>
+              </section>
+            ) : (
+              <>
+                <section
+                  className="transcript-panel"
+                  aria-label="Transcription"
+                >
+                  <TranscriptionPanel
+                    transcription={transcription}
+                    unavailable={transcriptionUnavailable}
+                  />
+                </section>
 
-            <section
-              className="insights-panel"
-              aria-label="AI Insights"
-            >
-              <AnalysisPanel
-                analysis={analysis}
-                unavailable={
-                  analysisUnavailable
-                }
-                transcriptionStatus={
-                  transcription?.status ?? null
-                }
-              />
-            </section>
+                <section
+                  className="insights-panel"
+                  aria-label="AI Insights"
+                >
+                  <AnalysisPanel
+                    analysis={analysis}
+                    unavailable={analysisUnavailable}
+                    transcriptionStatus={transcription?.status ?? null}
+                  />
+                </section>
+              </>
+            )}
           </article>
         </main>
       </div>

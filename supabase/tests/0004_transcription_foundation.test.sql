@@ -114,20 +114,36 @@ select ok(
 );
 
 select ok(
-  (select pg_catalog.lower(procedure.prosrc) like '%for update of transcription skip locked%'
+  (select pg_catalog.lower(procedure.prosrc) like '%for update of transcription, call skip locked%'
    from pg_catalog.pg_proc as procedure
    join pg_catalog.pg_namespace as namespace on namespace.oid = procedure.pronamespace
    where namespace.nspname = 'public'
      and procedure.proname = 'claim_transcription_jobs'),
-  'claiming structurally uses skip-locked row locks'
+  'claiming structurally locks both the job and parent call with skip-locked row locks'
 );
 
-select is(
-  (select count(*) from pg_catalog.pg_policies
-   where schemaname = 'storage' and tablename = 'objects'
-     and cmd in ('SELECT', 'UPDATE', 'DELETE')),
-  0::bigint,
-  'transcription adds no browser Storage read, update, or delete policy'
+select ok(
+  not exists (
+    select 1 from pg_catalog.pg_policies
+    where schemaname = 'storage' and tablename = 'objects'
+      and cmd = 'UPDATE'
+  )
+  and (select count(*) from pg_catalog.pg_policies
+       where schemaname = 'storage' and tablename = 'objects'
+         and cmd = 'SELECT') = 1
+  and (select count(*) from pg_catalog.pg_policies
+       where schemaname = 'storage' and tablename = 'objects'
+         and policyname = 'call_audio_select_managed_deleting_for_delete'
+         and cmd = 'SELECT'
+         and pg_catalog.lower(qual) like '%storage.allow_delete_query%') = 1
+  and (select count(*) from pg_catalog.pg_policies
+       where schemaname = 'storage' and tablename = 'objects'
+         and cmd = 'DELETE') = 1
+  and (select count(*) from pg_catalog.pg_policies
+       where schemaname = 'storage' and tablename = 'objects'
+         and policyname = 'call_audio_delete_managed_deleting'
+         and cmd = 'DELETE') = 1,
+  'transcription keeps Storage reads delete-transaction-only and deletion exact-object scoped'
 );
 
 select ok(

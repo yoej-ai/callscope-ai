@@ -169,12 +169,28 @@ select throws_ok(
 );
 
 reset role;
-select is(
-  (select count(*) from pg_policies
-   where schemaname = 'storage' and tablename = 'objects'
-     and policyname like 'call_audio_%' and cmd in ('UPDATE', 'DELETE')),
-  0::bigint,
-  'call audio has no browser update or delete policy'
+select ok(
+  not exists (
+    select 1 from pg_policies
+    where schemaname = 'storage' and tablename = 'objects'
+      and policyname like 'call_audio_%' and cmd = 'UPDATE'
+  )
+  and (select count(*) from pg_policies
+       where schemaname = 'storage' and tablename = 'objects'
+         and policyname like 'call_audio_%' and cmd = 'SELECT') = 1
+  and (select count(*) from pg_policies
+       where schemaname = 'storage' and tablename = 'objects'
+         and policyname = 'call_audio_select_managed_deleting_for_delete'
+         and cmd = 'SELECT'
+         and pg_catalog.lower(qual) like '%storage.allow_delete_query%') = 1
+  and (select count(*) from pg_policies
+       where schemaname = 'storage' and tablename = 'objects'
+         and policyname like 'call_audio_%' and cmd = 'DELETE') = 1
+  and (select count(*) from pg_policies
+       where schemaname = 'storage' and tablename = 'objects'
+         and policyname = 'call_audio_delete_managed_deleting'
+         and cmd = 'DELETE') = 1,
+  'call audio has no update policy and only guarded exact-object select/delete policies for deletion'
 );
 
 set local role authenticated;
