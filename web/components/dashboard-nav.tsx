@@ -13,6 +13,9 @@ export function DashboardNav({ email }: DashboardNavProps) {
         CallScope AI
       </Link>
       <nav aria-label="Account navigation">
+        <Link className="text-link dashboard-home-link" href="/dashboard">
+          Dashboard
+        </Link>
         <span>{email}</span>
         <form action={signOut}>
           <button className="button ghost" type="submit">

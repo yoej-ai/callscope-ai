@@ -5,7 +5,7 @@ export default function ErrorPage({ reset }: { reset: () => void }) {
     <main className="status-page">
       <p className="eyebrow">Something went wrong</p>
       <h1>We couldn’t load this page.</h1>
-      <p className="muted">Try again. If the problem continues, check the application logs.</p>
+      <p className="muted">Please try again. If the problem continues, wait a moment and retry.</p>
       <button className="button primary" onClick={reset} type="button">
         Try again
       </button>

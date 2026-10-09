@@ -73,7 +73,7 @@ export default async function OnboardingPage({
           <h1 id="onboarding-title">Create your first workspace</h1>
           <p className="muted">
             Give your team a clear home for call intelligence. You can add calls
-            in a later phase.
+            as soon as your workspace is ready.
           </p>
 
           {message ? (
