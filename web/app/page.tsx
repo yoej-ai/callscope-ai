@@ -47,7 +47,9 @@ export default function Home() {
             <div>
               <span className="status-dot" /> Completed call
             </div>
-            <span>18:42</span>
+            <span aria-label="Call duration: 18 minutes 42 seconds">
+              18m 42s
+            </span>
           </div>
           <p className="signal-label">Customer intent</p>
           <h2>Evaluating for a 25-seat rollout</h2>
@@ -57,7 +59,7 @@ export default function Home() {
               <strong>Positive</strong>
             </div>
             <div>
-              <span>Lead score</span>
+              <span>Opportunity score</span>
               <strong>86 / 100</strong>
             </div>
           </div>
