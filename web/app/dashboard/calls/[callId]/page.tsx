@@ -4,6 +4,7 @@ import { notFound, redirect } from "next/navigation";
 import { CallStatusAutoRefresh } from "@/components/call-status-auto-refresh";
 import { DashboardNav } from "@/components/dashboard-nav";
 import { isUuid } from "@/lib/api/types";
+import { humanizeDisplayLabel } from "@/lib/presentation/labels.mjs";
 import { createClient } from "@/lib/supabase/server";
 
 type CallDetailPageProps = {
@@ -384,7 +385,38 @@ function processingStage(
     return { label: "Analysis failed", tone: "failed" };
   }
 
-  return { label: "Finished", tone: "completed" };
+  return { label: "Completed", tone: "completed" };
+}
+
+function ActiveProcessingState({
+  eyebrow,
+  title,
+  description,
+  tone,
+}: {
+  eyebrow: string;
+  title: string;
+  description: string;
+  tone: "queued" | "processing";
+}) {
+  return (
+    <div
+      aria-live="polite"
+      className={`processing-state ${tone}`}
+      role="status"
+    >
+      <p className="eyebrow">{eyebrow}</p>
+      <div className="processing-state-status">
+        <span className="activity-indicator" aria-hidden="true" />
+        <span className={`call-status ${tone}`}>
+          {tone === "queued" ? "Queued" : "Processing"}
+        </span>
+      </div>
+      <h2>{title}</h2>
+      <p>{description}</p>
+      <p className="processing-note">This page updates automatically.</p>
+    </div>
+  );
 }
 
 function TranscriptionPanel({
@@ -423,26 +455,23 @@ function TranscriptionPanel({
 
   if (transcription.status === "queued") {
     return (
-      <div className="transcript-state">
-        <h2>Queued for transcription</h2>
-        <p>
-          This recording is waiting for the local CallScope worker.
-        </p>
-      </div>
+      <ActiveProcessingState
+        description="Your recording is queued and will begin when the local worker is available."
+        eyebrow="Transcript"
+        title="Waiting for transcription..."
+        tone="queued"
+      />
     );
   }
 
   if (transcription.status === "processing") {
     return (
-      <div
-        className="transcript-state"
-        aria-live="polite"
-      >
-        <h2>Transcription in progress</h2>
-        <p>
-          The local worker is transcribing this recording.
-        </p>
-      </div>
+      <ActiveProcessingState
+        description="The local worker is turning this recording into a transcript."
+        eyebrow="Transcript"
+        title="Transcribing recording..."
+        tone="processing"
+      />
     );
   }
 
@@ -454,9 +483,9 @@ function TranscriptionPanel({
       >
         <h2>Transcription failed</h2>
         <p>
-          Transcription could not finish. Ask the local worker operator to
-          check the recording and safe worker logs. Manual retry is not
-          available in the browser.
+          Processing failed. Check the local worker and recording, then try
+          again when processing is available. Manual retry is not available
+          in the browser.
         </p>
       </div>
     );
@@ -509,7 +538,7 @@ function InsightList({
     <ul className="insight-list">
       {items.map((item, index) => (
         <li key={`${index}-${item}`}>
-          {item}
+          {humanizeDisplayLabel(item)}
         </li>
       ))}
     </ul>
@@ -571,39 +600,23 @@ function AnalysisPanel({
 
   if (analysis.status === "queued") {
     return (
-      <div
-        className="insights-state"
-        aria-live="polite"
-      >
-        <p className="eyebrow">
-          AI Insights
-        </p>
-
-        <h2>Queued for AI analysis</h2>
-
-        <p>
-          This transcript is waiting for the local CallScope worker and Ollama.
-        </p>
-      </div>
+      <ActiveProcessingState
+        description="The transcript is ready and waiting for the local analysis service."
+        eyebrow="AI Insights"
+        title="Queued for AI analysis..."
+        tone="queued"
+      />
     );
   }
 
   if (analysis.status === "processing") {
     return (
-      <div
-        className="insights-state"
-        aria-live="polite"
-      >
-        <p className="eyebrow">
-          AI Insights
-        </p>
-
-        <h2>Analysis in progress</h2>
-
-        <p>
-          The local worker is generating structured insights.
-        </p>
-      </div>
+      <ActiveProcessingState
+        description="The local analysis service is turning the transcript into structured insights."
+        eyebrow="AI Insights"
+        title="Analyzing conversation..."
+        tone="processing"
+      />
     );
   }
 
@@ -620,9 +633,9 @@ function AnalysisPanel({
         <h2>Analysis failed</h2>
 
         <p>
-          The transcript remains available, but AI analysis could not finish.
-          Ask the local worker operator to check Ollama and safe worker logs.
-          Manual retry is not available in the browser.
+          The transcript remains available, but processing failed. Check the
+          local worker and try again when processing is available. Manual retry
+          is not available in the browser.
         </p>
       </div>
     );
@@ -642,14 +655,12 @@ function AnalysisPanel({
         </div>
 
         {analysis.overallScore !== null && (
-          <span
+          <div
             className="insight-score"
-            aria-label={
-              `Overall score ${analysis.overallScore} out of 100`
-            }
           >
-            {analysis.overallScore}/100
-          </span>
+            <span>Opportunity score</span>
+            <strong>{analysis.overallScore} <small>/ 100</small></strong>
+          </div>
         )}
       </div>
 
@@ -661,12 +672,20 @@ function AnalysisPanel({
       <dl className="insight-facts">
         <div>
           <dt>Sentiment</dt>
-          <dd>{analysis.sentiment}</dd>
+          <dd className={`sentiment-value ${analysis.sentiment}`}>
+            {analysis.sentiment
+              ? humanizeDisplayLabel(analysis.sentiment)
+              : "Not identified"}
+          </dd>
         </div>
 
         <div>
           <dt>Primary intent</dt>
-          <dd>{analysis.primaryIntent}</dd>
+          <dd>
+            {analysis.primaryIntent
+              ? humanizeDisplayLabel(analysis.primaryIntent)
+              : "Not identified"}
+          </dd>
         </div>
       </dl>
 
@@ -899,7 +918,7 @@ export default async function CallDetailPage({
             aria-labelledby="call-detail-title"
           >
             <header className="call-detail-header">
-              <div>
+              <div className="call-detail-title">
                 <p className="eyebrow">
                   Call detail
                 </p>
@@ -919,13 +938,6 @@ export default async function CallDetailPage({
             </header>
 
             <dl className="call-metadata">
-              <div>
-                <dt>Current stage</dt>
-                <dd>
-                  {currentStage.label}
-                </dd>
-              </div>
-
               <div>
                 <dt>Upload state</dt>
                 <dd>

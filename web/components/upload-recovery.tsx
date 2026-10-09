@@ -164,6 +164,7 @@ export function PendingUploadRecovery({
   return (
     <div className="recovery-action">
       <button
+        aria-busy={isWorking}
         className="button ghost recovery-button"
         disabled={isWorking}
         onClick={retryVerification}
@@ -230,6 +231,7 @@ export function StaleUploadReconciliation({
   return (
     <div className="stale-recovery">
       <button
+        aria-busy={isWorking}
         className="button ghost recovery-button"
         disabled={isWorking}
         onClick={reconcileStaleUploads}

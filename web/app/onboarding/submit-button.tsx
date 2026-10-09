@@ -7,6 +7,7 @@ export function CreateWorkspaceButton() {
 
   return (
     <button
+      aria-busy={pending}
       aria-disabled={pending}
       className="button primary"
       disabled={pending}

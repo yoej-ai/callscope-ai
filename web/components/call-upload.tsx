@@ -112,9 +112,18 @@ export function CallUpload({ workspaceId }: CallUploadProps) {
   const router = useRouter();
   const fileInput = useRef<HTMLInputElement>(null);
   const working = useRef(false);
+  const [selectedFileName, setSelectedFileName] = useState<string | null>(null);
   const [stage, setStage] = useState<UploadStage>("ready");
   const [message, setMessage] = useState(STAGE_MESSAGE.ready);
   const isWorking = ["preparing", "uploading", "verifying"].includes(stage);
+  const submitLabel: Record<UploadStage, string> = {
+    ready: "Upload recording",
+    preparing: "Preparing...",
+    uploading: "Uploading...",
+    verifying: "Verifying...",
+    complete: "Upload another recording",
+    error: "Try upload again",
+  };
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -226,6 +235,7 @@ export function CallUpload({ workspaceId }: CallUploadProps) {
       }
 
       if (fileInput.current) fileInput.current.value = "";
+      setSelectedFileName(null);
       setStage("complete");
       setMessage(STAGE_MESSAGE.complete);
       router.refresh();
@@ -262,11 +272,27 @@ export function CallUpload({ workspaceId }: CallUploadProps) {
           disabled={isWorking}
           id="call-recording"
           name="recording"
+          onChange={(event) => {
+            const nextFile = event.currentTarget.files?.[0];
+            setSelectedFileName(nextFile?.name ?? null);
+            setStage("ready");
+            setMessage(nextFile ? "Ready to upload" : STAGE_MESSAGE.ready);
+          }}
           ref={fileInput}
           type="file"
         />
-        <button className="button primary" disabled={isWorking} type="submit">
-          {isWorking ? "Working…" : "Upload recording"}
+        <p className="selected-file" aria-live="polite">
+          {selectedFileName
+            ? `Selected: ${selectedFileName}`
+            : "No recording selected"}
+        </p>
+        <button
+          aria-busy={isWorking}
+          className="button primary"
+          disabled={isWorking}
+          type="submit"
+        >
+          {submitLabel[stage]}
         </button>
       </form>
       <div

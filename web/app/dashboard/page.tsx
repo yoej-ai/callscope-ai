@@ -346,6 +346,9 @@ export default async function DashboardPage({
               <div>
                 <p className="eyebrow">Recent activity</p>
                 <h2 id="call-history-title">Call history</h2>
+                <p className="section-support">
+                  Select a call to review its transcript and insights.
+                </p>
               </div>
               <div className="history-actions">
                 {!callListFailed && calls.length > 0 && (
