@@ -4,12 +4,12 @@ CallScope AI is a multi-user call-intelligence SaaS foundation for sales and
 support teams. It is designed to turn customer conversations into secure,
 searchable summaries, intent, sentiment, objections, scores, and action items.
 
-This repository contains the production-oriented V1 foundation, private
+This repository contains the security-oriented local MVP foundation, private
 tenant-authorized audio ingestion, transcription and AI-analysis state machines,
 isolated transcription and analysis workers, a unified local supervisor, and a
 tenant-safe Call Detail experience. The source implements the complete upload,
-transcription, analysis,
-and structured-insights flow. Repository history records hosted end-to-end
+transcription, analysis, and structured-insights flow. Repository history
+records hosted end-to-end
 validation of both the secure transcription and AI-analysis paths; that evidence
 does not mean the local workers are always running or that an external hosted
 project's migration state remains continuously current. The workers are operated
@@ -421,6 +421,12 @@ This supervisor is local process orchestration, not an always-on production or
 cloud deployment. It does not provide autoscaling, production monitoring,
 distributed queues, high availability, or an external process manager.
 
+Faster-Whisper remains multilingual. The worker stores its detected language
+code only when the model supplies well-formed metadata with at least 0.80
+probability; weaker or malformed metadata is stored as no language rather than
+as a confident but potentially incorrect label. This does not hardcode English
+or add another language model.
+
 The `overall_score` is defined as an engagement/opportunity score rather than a
 sentiment score. Genuine business conversations retain bounded 0–100 scores,
 while transcripts with no genuine business intent, such as workflow tests or
@@ -432,6 +438,32 @@ The Call Detail page renders queued, processing, failed, and completed states
 using only tenant-safe columns. While transcription or analysis is queued or
 processing, the page refreshes periodically when visible so completed results can
 appear without a manual reload. Worker credentials never enter the browser.
+
+## Local MVP demo checklist
+
+1. Start the frontend and backend using the setup commands above, then sign in.
+2. Create a workspace or select an existing accessible workspace.
+3. Upload a supported MP3, MP4 audio, M4A, WAV, WebM, or OGG recording.
+4. In the configured trusted worker environment, ensure FFmpeg/ffprobe is on
+   `PATH`, run `ollama pull qwen3:4b-instruct`, and start `callscope-worker`.
+5. Open the call detail and observe waiting, transcription, and AI-analysis
+   states update while the page is visible.
+6. Verify the completed transcript; an uncertain language should appear as not
+   confidently detected instead of displaying a weak model guess.
+7. Verify the structured summary, sentiment, intent, objections, action items,
+   topics, and optional opportunity score.
+8. Verify the call reaches the terminal `Finished` state, or a safe failed state
+   with operator guidance, and that active polling stops in terminal states.
+9. Verify the browser UI and network-visible application data contain no worker
+   secret, claim token, lease, attempt count, internal error code, prompt, or raw
+   model response.
+
+The currently verified MVP includes Supabase Auth and workspaces, tenant-safe
+upload and private Storage, local transcription, local Ollama analysis, the
+unified worker supervisor, structured insights UI, RLS and service-role-only RPC
+boundaries, CI, and secret scanning. Hosted validation recorded in repository
+history covers successful and failed transcription plus the secure analysis
+path; it is evidence from those runs, not continuous production monitoring.
 
 ## Database overview
 
@@ -577,6 +609,11 @@ at release `v3.0.1` and pins Supabase CLI `2.119.0` rather than floating on late
   trusted deletion of invalid or orphaned Storage objects remain deferred
 - the unified worker supervisor is local/manual and processes jobs only while
   its machine is running; no always-on cloud or production-scale worker exists
+- autoscaling, high availability, production monitoring, and alerting are not
+  implemented
+- billing and usage enforcement are not implemented
+- stronger media sandbox isolation and complete retention, deletion, and
+  compliance workflows remain production work
 - AI Call Analysis & Insights runs through the local Ollama worker; speaker
   diarization, vector search, billing, CRM integrations, and always-on cloud
   inference are not implemented

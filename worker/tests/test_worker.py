@@ -21,7 +21,12 @@ from callscope_worker.core import (
     process_one,
     verify_media_magic,
 )
-from callscope_worker.transcriber import probe_audio
+from callscope_worker.transcriber import (
+    FasterWhisperTranscriber,
+    TranscriptionStartupError,
+    probe_audio,
+    reliable_language_code,
+)
 
 CALL = "20000000-0000-0000-0000-000000000041"
 WORKSPACE = "10000000-0000-0000-0000-000000000041"
@@ -264,6 +269,67 @@ def test_transcript_validation_enforces_limits() -> None:
     ):
         with pytest.raises(WorkerError):
             transcript.validate()
+
+
+@pytest.mark.parametrize(
+    ("language", "probability", "expected"),
+    [
+        ("EN", 0.95, "en"),
+        ("fr", 0.8, "fr"),
+        ("la", 0.79, None),
+        ("en", float("nan"), None),
+        ("not a code", 0.99, None),
+        (None, 0.99, None),
+        ("en", None, None),
+    ],
+)
+def test_language_code_requires_reliable_model_metadata(
+    language: object,
+    probability: object,
+    expected: str | None,
+) -> None:
+    assert reliable_language_code(language, probability) == expected
+
+
+def test_transcriber_omits_low_confidence_language_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        "callscope_worker.transcriber.probe_audio",
+        lambda path: 1,
+    )
+
+    class FakeModel:
+        def transcribe(self, path: str, **options):
+            assert options == {"beam_size": 1, "vad_filter": True}
+            return (
+                iter([SimpleNamespace(text="Hello", start=0, end=1)]),
+                SimpleNamespace(language="la", language_probability=0.42),
+            )
+
+    transcriber = FasterWhisperTranscriber.__new__(FasterWhisperTranscriber)
+    transcriber.model = FakeModel()
+
+    transcript = transcriber.transcribe(tmp_path / "recording.wav")
+
+    assert transcript.text == "Hello"
+    assert transcript.language is None
+
+
+def test_transcriber_reports_safe_missing_ffprobe_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "callscope_worker.transcriber.shutil.which",
+        lambda executable: None,
+    )
+
+    with pytest.raises(TranscriptionStartupError) as error:
+        FasterWhisperTranscriber("tiny")
+
+    assert error.value.code == "ffprobe_unavailable"
+    assert str(error.value) == "ffprobe_unavailable"
 
 
 class FakeGateway:

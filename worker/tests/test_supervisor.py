@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 import callscope_worker.cli as transcription_cli
+import callscope_worker.supervisor as supervisor
 from callscope_worker.analysis_worker import AnalysisLeaseHeartbeat, AnalysisWorkerError
 from callscope_worker.core import LeaseHeartbeat, WorkerError
 from callscope_worker.supervisor import (
@@ -138,6 +139,53 @@ def test_empty_queue_waits_for_poll_interval_instead_of_busy_looping() -> None:
     assert calls == 1
     assert stop.waits == [30]
     assert runtime.closed is True
+
+
+def test_transcription_startup_reports_safe_configuration_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sensitive_message = "configuration contained private credential material"
+
+    def invalid_settings():
+        raise ValueError(sensitive_message)
+
+    monkeypatch.setattr(
+        supervisor.Settings,
+        "from_env",
+        staticmethod(invalid_settings),
+    )
+
+    with pytest.raises(supervisor.PipelineStartupError) as error:
+        supervisor._TranscriptionRuntime.open()
+
+    assert error.value.code == "worker_configuration_invalid"
+    assert sensitive_message not in str(error.value)
+
+
+def test_analysis_startup_reports_analysis_specific_configuration_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sensitive_message = "invalid local model URL with private material"
+    monkeypatch.setattr(
+        supervisor.Settings,
+        "from_env",
+        staticmethod(lambda: object()),
+    )
+
+    def invalid_ollama_settings():
+        raise ValueError(sensitive_message)
+
+    monkeypatch.setattr(
+        supervisor.OllamaSettings,
+        "from_env",
+        staticmethod(invalid_ollama_settings),
+    )
+
+    with pytest.raises(supervisor.PipelineStartupError) as error:
+        supervisor._AnalysisRuntime.open(heartbeat_interval_seconds=60)
+
+    assert error.value.code == "analysis_configuration_invalid"
+    assert sensitive_message not in str(error.value)
 
 
 @pytest.mark.parametrize(

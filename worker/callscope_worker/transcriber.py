@@ -9,12 +9,49 @@ import json
 import math
 import shutil
 import subprocess
+from numbers import Real
 from pathlib import Path
 
-from .core import Transcript, WorkerError
+from .core import LANGUAGE_RE, Transcript, WorkerError
 
 MAX_DURATION_SECONDS = 3600
 MAX_SEGMENTS = 10000
+MIN_LANGUAGE_PROBABILITY = 0.8
+
+
+class TranscriptionStartupError(RuntimeError):
+    """Safe local dependency/model startup failure code."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
+
+
+def reliable_language_code(
+    language: object,
+    probability: object,
+) -> str | None:
+    """Return only well-formed, high-confidence model language metadata."""
+
+    if not isinstance(language, str):
+        return None
+
+    normalized_language = language.strip().lower()
+    if not normalized_language or not LANGUAGE_RE.fullmatch(normalized_language):
+        return None
+
+    if isinstance(probability, bool) or not isinstance(probability, Real):
+        return None
+
+    normalized_probability = float(probability)
+    if (
+        not math.isfinite(normalized_probability)
+        or not 0 <= normalized_probability <= 1
+        or normalized_probability < MIN_LANGUAGE_PROBABILITY
+    ):
+        return None
+
+    return normalized_language
 
 
 def probe_audio(path: Path) -> int:
@@ -60,15 +97,16 @@ class FasterWhisperTranscriber:
 
     def __init__(self, model_name: str) -> None:
         if not shutil.which("ffprobe"):
-            raise RuntimeError("ffprobe (FFmpeg) must be installed before worker startup")
+            raise TranscriptionStartupError("ffprobe_unavailable")
         try:
             from faster_whisper import WhisperModel  # noqa: PLC0415
         except ImportError as exc:
-            raise RuntimeError(
-                "Install the optional worker speech dependencies: pip install -e '.[speech]'"
-            ) from exc
+            raise TranscriptionStartupError("speech_dependencies_unavailable") from exc
         # First execution may download model weights. Never download private audio.
-        self.model = WhisperModel(model_name, device="cpu", compute_type="int8")
+        try:
+            self.model = WhisperModel(model_name, device="cpu", compute_type="int8")
+        except Exception as exc:
+            raise TranscriptionStartupError("transcription_model_unavailable") from exc
 
     def transcribe(self, path: Path) -> Transcript:
         verified_duration = probe_audio(path)
@@ -101,7 +139,10 @@ class FasterWhisperTranscriber:
                 snippets.append(snippet)
                 if sum(map(len, snippets)) > 1_000_000:
                     raise WorkerError("transcript_too_large", retryable=False)
-            language = str(info.language).lower() if info.language else None
+            language = reliable_language_code(
+                getattr(info, "language", None),
+                getattr(info, "language_probability", None),
+            )
         except WorkerError:
             raise
         except Exception as exc:
