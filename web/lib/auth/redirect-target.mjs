@@ -1,5 +1,5 @@
 const DEFAULT_AUTH_REDIRECT = "/dashboard";
-const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/u;
+const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/u;
 
 /** @param {string} value */
 function isUnsafeAtAnyEncoding(value) {
@@ -44,26 +44,36 @@ function isUnsafeAtAnyEncoding(value) {
  */
 export function resolveSafeAuthRedirect(requestUrl, requestedNext) {
   const applicationUrl = new URL(requestUrl);
-  const fallback = new URL(DEFAULT_AUTH_REDIRECT, applicationUrl.origin);
+  return new URL(
+    normalizeSafeAuthRedirectPath(requestedNext),
+    applicationUrl.origin,
+  );
+}
+
+/** @param {string | null | undefined} requestedNext */
+export function normalizeSafeAuthRedirectPath(requestedNext) {
+  if (typeof requestedNext !== "string") {
+    return DEFAULT_AUTH_REDIRECT;
+  }
 
   if (
-    requestedNext === null ||
     requestedNext.length === 0 ||
     requestedNext.length > 2048 ||
     isUnsafeAtAnyEncoding(requestedNext)
   ) {
-    return fallback;
+    return DEFAULT_AUTH_REDIRECT;
   }
 
   try {
-    const redirectUrl = new URL(requestedNext, applicationUrl.origin);
+    const validationOrigin = "https://auth-redirect.invalid";
+    const redirectUrl = new URL(requestedNext, validationOrigin);
 
-    if (redirectUrl.origin !== applicationUrl.origin) {
-      return fallback;
+    if (redirectUrl.origin !== validationOrigin) {
+      return DEFAULT_AUTH_REDIRECT;
     }
 
-    return redirectUrl;
+    return `${redirectUrl.pathname}${redirectUrl.search}${redirectUrl.hash}`;
   } catch {
-    return fallback;
+    return DEFAULT_AUTH_REDIRECT;
   }
 }
