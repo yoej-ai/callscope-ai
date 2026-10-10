@@ -1,0 +1,62 @@
+{
+  "schema_version": "eval_playbook.v1",
+  "fixture_id": "sales_v1",
+  "name": "Sales Evaluation Playbook",
+  "vertical": "sales",
+  "criteria": [
+    {
+      "criterion_id": "greeting",
+      "name": "Greeting",
+      "description": "The agent opens professionally and establishes the purpose of the conversation.",
+      "weight": 10,
+      "pass_guidance": "A clear greeting and relevant introduction or purpose are observable.",
+      "fail_guidance": "The opening is abrupt, confusing, or omits both greeting and purpose.",
+      "position": 1
+    },
+    {
+      "criterion_id": "discovery",
+      "name": "Discovery",
+      "description": "The agent asks useful questions to understand goals, needs, or current challenges.",
+      "weight": 25,
+      "pass_guidance": "The agent asks and follows up on substantive need or goal questions.",
+      "fail_guidance": "The agent pitches without adequately exploring the customer's situation.",
+      "position": 2
+    },
+    {
+      "criterion_id": "qualification",
+      "name": "Qualification",
+      "description": "The agent establishes relevant fit signals such as need, timing, authority, or constraints.",
+      "weight": 20,
+      "pass_guidance": "The conversation establishes enough concrete fit information to guide a sales decision.",
+      "fail_guidance": "Applicable fit questions are skipped or leave material qualification gaps.",
+      "position": 3
+    },
+    {
+      "criterion_id": "objection_handling",
+      "name": "Objection Handling",
+      "description": "When an objection occurs, the agent acknowledges it and responds constructively.",
+      "weight": 15,
+      "pass_guidance": "An expressed concern is acknowledged and answered with relevant, non-pressuring information.",
+      "fail_guidance": "An expressed concern is ignored, dismissed, contradicted, or handled without relevance.",
+      "position": 4
+    },
+    {
+      "criterion_id": "closing",
+      "name": "Closing",
+      "description": "The agent makes an appropriate attempt to advance or conclude the sales conversation.",
+      "weight": 15,
+      "pass_guidance": "The agent asks for a suitable commitment, booking, decision, or agreed conclusion.",
+      "fail_guidance": "The call ends without an appropriate attempt to advance or clearly conclude it.",
+      "position": 5
+    },
+    {
+      "criterion_id": "clear_next_step",
+      "name": "Clear Next Step",
+      "description": "The conversation ends with an explicit owner and concrete next action or timing when follow-up is appropriate.",
+      "weight": 15,
+      "pass_guidance": "A specific next action, owner, and timing are mutually clear, or the final disposition is explicit.",
+      "fail_guidance": "The next action is vague, ownerless, missing timing, or absent despite being needed.",
+      "position": 6
+    }
+  ]
+}
