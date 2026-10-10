@@ -8,12 +8,18 @@ import {
   getApiWorkspace,
 } from "@/lib/api/client";
 import {
-  callDisplayName,
-  callStatusLabel,
-  canManageCall,
-} from "@/lib/call-management.mjs";
-import { isUuid } from "@/lib/api/types";
+  callHistoryStageLabel,
+  dashboardCallHistoryHref,
+  isActiveCallHistoryStage,
+  normalizeCallSearch,
+  parseCallHistoryPage,
+  parseCallHistoryResponse,
+  parseCallHistorySort,
+  parseCallHistoryStatus,
+} from "@/lib/call-history.mjs";
+import { callDisplayName, canManageCall } from "@/lib/call-management.mjs";
 import { CallActions } from "@/components/call-actions";
+import { CallStatusAutoRefresh } from "@/components/call-status-auto-refresh";
 import { CallUpload } from "@/components/call-upload";
 import { DashboardNav } from "@/components/dashboard-nav";
 import {
@@ -24,79 +30,19 @@ import { createClient } from "@/lib/supabase/server";
 import { listAccessibleWorkspaces } from "@/lib/workspaces";
 
 type DashboardPageProps = {
-  searchParams: Promise<{ workspace?: string | string[] }>;
+  searchParams: Promise<{
+    workspace?: string | string[];
+    q?: string | string[];
+    status?: string | string[];
+    sort?: string | string[];
+    page?: string | string[];
+  }>;
 };
 
 type DashboardApiErrorProps = {
   email: string;
   kind: Exclude<ApiErrorKind, "authentication">;
 };
-
-const CALL_STATUSES = new Set([
-  "pending_upload",
-  "uploaded",
-  "processing",
-  "completed",
-  "failed",
-  "deleting",
-]);
-
-type CallSummary = {
-  id: string;
-  displayName: string | null;
-  originalFilename: string;
-  uploadedBy: string | null;
-  contentType: string | null;
-  sizeBytes: number | null;
-  status: string;
-  createdAt: string;
-  uploadCompletedAt: string | null;
-};
-
-function parseCallSummary(value: unknown): CallSummary | null {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return null;
-  }
-
-  const call = value as Record<string, unknown>;
-  if (
-    !isUuid(call.id) ||
-    (call.display_name !== null &&
-      (typeof call.display_name !== "string" ||
-        !call.display_name.trim() ||
-        call.display_name.length > 120 ||
-        /[\u0000-\u001f\u007f]/.test(call.display_name))) ||
-    typeof call.original_filename !== "string" ||
-    !call.original_filename.trim() ||
-    (call.uploaded_by !== null && !isUuid(call.uploaded_by)) ||
-    (call.content_type !== null && typeof call.content_type !== "string") ||
-    (call.size_bytes !== null &&
-      (typeof call.size_bytes !== "number" ||
-        !Number.isSafeInteger(call.size_bytes) ||
-        call.size_bytes < 1)) ||
-    typeof call.status !== "string" ||
-    !CALL_STATUSES.has(call.status) ||
-    typeof call.created_at !== "string" ||
-    Number.isNaN(Date.parse(call.created_at)) ||
-    (call.upload_completed_at !== null &&
-      (typeof call.upload_completed_at !== "string" ||
-        Number.isNaN(Date.parse(call.upload_completed_at))))
-  ) {
-    return null;
-  }
-
-  return {
-    id: call.id,
-    displayName: call.display_name,
-    originalFilename: call.original_filename,
-    uploadedBy: call.uploaded_by,
-    contentType: call.content_type,
-    sizeBytes: call.size_bytes,
-    status: call.status,
-    createdAt: call.created_at,
-    uploadCompletedAt: call.upload_completed_at,
-  };
-}
 
 function formatSize(sizeBytes: number | null) {
   if (sizeBytes === null) return "Size unavailable";
@@ -180,12 +126,30 @@ export default async function DashboardPage({
     redirect("/onboarding");
   }
 
-  const { workspace: requestedWorkspace } = await searchParams;
+  const {
+    workspace: requestedWorkspace,
+    q: requestedSearch,
+    status: requestedStatus,
+    sort: requestedSort,
+    page: requestedPage,
+  } = await searchParams;
   const requestedWorkspaceId =
     typeof requestedWorkspace === "string" ? requestedWorkspace : undefined;
   const activeWorkspace =
     workspaces.find((workspace) => workspace.id === requestedWorkspaceId) ??
     workspaces[0];
+  const search = normalizeCallSearch(
+    typeof requestedSearch === "string" ? requestedSearch : "",
+  );
+  const statusFilter = parseCallHistoryStatus(
+    typeof requestedStatus === "string" ? requestedStatus : undefined,
+  );
+  const sortOrder = parseCallHistorySort(
+    typeof requestedSort === "string" ? requestedSort : undefined,
+  );
+  const requestedPageNumber = parseCallHistoryPage(
+    typeof requestedPage === "string" ? requestedPage : undefined,
+  );
 
   const {
     data: { session },
@@ -308,31 +272,60 @@ export default async function DashboardPage({
     });
   }
 
-  const { data: callRows, error: callError } = await supabase
-    .from("calls")
-    .select(
-      "id, display_name, original_filename, uploaded_by, content_type, size_bytes, status, created_at, upload_completed_at",
-    )
-    .eq("workspace_id", activeWorkspace.id)
-    .order("created_at", { ascending: false })
-    .limit(25);
+  let callHistory: ReturnType<typeof parseCallHistoryResponse> = null;
+  let callListFailed = false;
 
-  const parsedCalls = (callRows ?? []).map(parseCallSummary);
-  const callsAreValid = parsedCalls.every(
-    (call): call is CallSummary => call !== null,
-  );
-  const calls = callsAreValid ? parsedCalls : [];
-  const callListFailed = Boolean(callError) || !callsAreValid;
+  if (!search.error) {
+    const { data: callHistoryValue, error: callHistoryError } = await supabase.rpc(
+      "list_workspace_calls",
+      {
+        p_workspace_id: activeWorkspace.id,
+        p_search: search.value || null,
+        p_status: statusFilter,
+        p_sort: sortOrder,
+        p_page: requestedPageNumber,
+      },
+    );
+    callHistory = parseCallHistoryResponse(callHistoryValue);
+    callListFailed = Boolean(callHistoryError) || callHistory === null;
 
-  if (callError) {
-    console.error("Unable to load workspace calls", { code: callError.code });
-  } else if (!callsAreValid) {
-    console.error("Workspace call response was invalid");
+    if (callHistoryError) {
+      console.error("Unable to load workspace call history", {
+        code: callHistoryError.code,
+        workspaceId: activeWorkspace.id,
+      });
+    } else if (!callHistory) {
+      console.error("Workspace call history response was invalid");
+    }
   }
+
+  if (callHistory && callHistory.page !== requestedPageNumber) {
+    redirect(
+      dashboardCallHistoryHref({
+        workspaceId: activeWorkspace.id,
+        search: search.value,
+        status: statusFilter,
+        sort: sortOrder,
+        page: callHistory.page,
+      }),
+    );
+  }
+
+  const calls = callHistory?.items ?? [];
+  const hasActiveCalls = calls.some((call) =>
+    isActiveCallHistoryStage(call.processingStage),
+  );
+  const hasDiscoveryFilters = search.value !== "" || statusFilter !== "all";
+  const clearFiltersHref = dashboardCallHistoryHref({
+    workspaceId: activeWorkspace.id,
+  });
 
   return (
     <div className="dashboard-shell">
       <DashboardNav email={user.email ?? "Signed-in user"} />
+      <CallStatusAutoRefresh
+        active={!callListFailed && !search.error && hasActiveCalls}
+      />
       <main className="dashboard-main">
         <section className="workspace-header" aria-labelledby="workspace-title">
           <div>
@@ -372,85 +365,195 @@ export default async function DashboardPage({
                 <p className="eyebrow">Recent activity</p>
                 <h2 id="call-history-title">Call history</h2>
                 <p className="section-support">
-                  Select a call to review its transcript and insights.
+                  Find a call and review its transcript and insights.
                 </p>
               </div>
               <div className="history-actions">
-                {!callListFailed && calls.length > 0 && (
-                  <span className="call-count">Latest {calls.length}</span>
+                {!callListFailed && callHistory && callHistory.totalCount > 0 && (
+                  <span className="call-count">
+                    {callHistory.totalCount} {callHistory.totalCount === 1 ? "call" : "calls"}
+                  </span>
                 )}
                 <StaleUploadReconciliation workspaceId={activeWorkspace.id} />
               </div>
             </div>
 
-            {callListFailed ? (
+            <form action="/dashboard" className="history-filters" method="get">
+              <input name="workspace" type="hidden" value={activeWorkspace.id} />
+              <div className="history-filter-field history-search-field">
+                <label htmlFor="call-search">Search calls</label>
+                <input
+                  defaultValue={search.value}
+                  id="call-search"
+                  maxLength={100}
+                  name="q"
+                  placeholder="Name or source filename"
+                  type="search"
+                />
+              </div>
+              <div className="history-filter-field">
+                <label htmlFor="call-status-filter">Status</label>
+                <select
+                  defaultValue={statusFilter}
+                  id="call-status-filter"
+                  name="status"
+                >
+                  <option value="all">All statuses</option>
+                  <option value="in_progress">In progress</option>
+                  <option value="completed">Completed</option>
+                  <option value="failed">Failed</option>
+                  <option value="deleting">Deleting</option>
+                </select>
+              </div>
+              <div className="history-filter-field">
+                <label htmlFor="call-sort">Sort</label>
+                <select defaultValue={sortOrder} id="call-sort" name="sort">
+                  <option value="newest">Newest first</option>
+                  <option value="oldest">Oldest first</option>
+                </select>
+              </div>
+              <div className="history-filter-actions">
+                <button className="button primary small" type="submit">
+                  Apply
+                </button>
+                <Link className="button ghost small" href={clearFiltersHref}>
+                  Clear
+                </Link>
+              </div>
+            </form>
+
+            {search.error ? (
+              <div className="call-list-message error" role="alert">
+                <strong>Search could not be applied.</strong>
+                <span>{search.error}</span>
+                <Link className="text-link" href={clearFiltersHref}>
+                  Clear filters
+                </Link>
+              </div>
+            ) : callListFailed ? (
               <div className="call-list-message error" role="alert">
                 <strong>Call history could not be loaded.</strong>
                 <span>Please refresh the page and try again.</span>
               </div>
-            ) : calls.length === 0 ? (
+            ) : callHistory?.workspaceTotalCount === 0 ? (
               <div className="call-list-message">
                 <strong>No calls yet</strong>
                 <span>Upload the first recording for this workspace.</span>
               </div>
+            ) : calls.length === 0 ? (
+              <div className="call-list-message">
+                <strong>No matching calls</strong>
+                <span>Try adjusting your search or filters.</span>
+                {hasDiscoveryFilters && (
+                  <Link className="text-link" href={clearFiltersHref}>
+                    Clear filters
+                  </Link>
+                )}
+              </div>
             ) : (
-              <ol className="call-list">
-                {calls.map((call) => {
-                  const displayName = callDisplayName(
-                    call.displayName,
-                    call.originalFilename,
-                  );
-                  const viewHref = `/dashboard/calls/${encodeURIComponent(call.id)}`;
-                  const manageable = canManageCall({
-                    currentUserId: user.id,
-                    uploadedBy: call.uploadedBy,
-                    workspaceRole,
-                  });
+              <>
+                <ol className="call-list">
+                  {calls.map((call) => {
+                    const displayName = callDisplayName(
+                      call.displayName,
+                      call.originalFilename,
+                    );
+                    const viewHref = `/dashboard/calls/${encodeURIComponent(call.id)}`;
+                    const manageable = canManageCall({
+                      currentUserId: user.id,
+                      uploadedBy: call.uploadedBy,
+                      workspaceRole,
+                    });
 
-                  return (
-                    <li key={call.id} className="call-row">
-                      <div className="call-primary">
-                        <Link className="call-link" href={viewHref}>
-                          {displayName}
-                        </Link>
-                        {call.displayName && (
-                          <span>Source: {call.originalFilename}</span>
-                        )}
-                        <span>
-                          {formatSize(call.sizeBytes)}
-                          {call.contentType ? ` · ${call.contentType}` : ""}
-                        </span>
-                      </div>
-                      <div className="call-secondary">
-                        <div className="call-row-controls">
-                          <span className={`call-status ${call.status}`}>
-                            {callStatusLabel(call.status)}
+                    return (
+                      <li key={call.id} className="call-row">
+                        <div className="call-primary">
+                          <Link className="call-link" href={viewHref}>
+                            {displayName}
+                          </Link>
+                          {call.displayName && (
+                            <span>Source: {call.originalFilename}</span>
+                          )}
+                          <span>
+                            {formatSize(call.sizeBytes)}
+                            {call.contentType ? ` · ${call.contentType}` : ""}
                           </span>
-                          <CallActions
-                            callId={call.id}
-                            canManage={manageable}
-                            displayName={displayName}
-                            isDeleting={call.status === "deleting"}
-                            originalFilename={call.originalFilename}
-                            retryStage={null}
-                            viewHref={viewHref}
-                            workspaceId={activeWorkspace.id}
-                          />
                         </div>
-                        <time dateTime={call.uploadCompletedAt ?? call.createdAt}>
-                          {formatDate(call.uploadCompletedAt ?? call.createdAt)}
-                        </time>
-                        {call.status === "pending_upload" && (
-                          <PendingUploadRecovery
-                            callId={call.id}
-                            workspaceId={activeWorkspace.id}
-                          />
-                        )}
-                      </div>
-                    </li>
-                  );
-                })}
-              </ol>
+                        <div className="call-secondary">
+                          <div className="call-row-controls">
+                            <span className={`call-status ${call.processingStage}`}>
+                              {callHistoryStageLabel(call.processingStage)}
+                            </span>
+                            <CallActions
+                              callId={call.id}
+                              canManage={manageable}
+                              displayName={displayName}
+                              isDeleting={call.processingStage === "deleting"}
+                              originalFilename={call.originalFilename}
+                              retryStage={null}
+                              viewHref={viewHref}
+                              workspaceId={activeWorkspace.id}
+                            />
+                          </div>
+                          <time dateTime={call.uploadCompletedAt ?? call.createdAt}>
+                            {formatDate(call.uploadCompletedAt ?? call.createdAt)}
+                          </time>
+                          {call.processingStage === "upload_pending" && (
+                            <PendingUploadRecovery
+                              callId={call.id}
+                              workspaceId={activeWorkspace.id}
+                            />
+                          )}
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ol>
+
+                {callHistory && callHistory.totalPages > 0 && (
+                  <nav className="call-pagination" aria-label="Call history pages">
+                    {callHistory.page > 1 ? (
+                      <Link
+                        className="button ghost small"
+                        href={dashboardCallHistoryHref({
+                          workspaceId: activeWorkspace.id,
+                          search: search.value,
+                          status: statusFilter,
+                          sort: sortOrder,
+                          page: callHistory.page - 1,
+                        })}
+                      >
+                        Previous
+                      </Link>
+                    ) : (
+                      <span aria-disabled="true" className="button ghost small">
+                        Previous
+                      </span>
+                    )}
+                    <span className="pagination-position" aria-live="polite">
+                      Page {callHistory.page} of {callHistory.totalPages}
+                    </span>
+                    {callHistory.page < callHistory.totalPages ? (
+                      <Link
+                        className="button ghost small"
+                        href={dashboardCallHistoryHref({
+                          workspaceId: activeWorkspace.id,
+                          search: search.value,
+                          status: statusFilter,
+                          sort: sortOrder,
+                          page: callHistory.page + 1,
+                        })}
+                      >
+                        Next
+                      </Link>
+                    ) : (
+                      <span aria-disabled="true" className="button ghost small">
+                        Next
+                      </span>
+                    )}
+                  </nav>
+                )}
+              </>
             )}
           </section>
         </div>
