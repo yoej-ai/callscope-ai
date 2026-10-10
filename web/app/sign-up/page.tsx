@@ -1,11 +1,25 @@
-import { signUp } from "@/app/auth/actions";
+import { signInWithGoogle, signUp } from "@/app/auth/actions";
 import { AuthForm } from "@/components/auth-form";
+import { normalizeSafeAuthRedirectPath } from "@/lib/auth/redirect-target.mjs";
 
 type SignUpPageProps = {
-  searchParams: Promise<{ message?: string }>;
+  searchParams: Promise<{
+    message?: string | string[];
+    next?: string | string[];
+  }>;
 };
 
 export default async function SignUpPage({ searchParams }: SignUpPageProps) {
-  const { message } = await searchParams;
-  return <AuthForm action={signUp} message={message} mode="sign-up" />;
+  const { message, next } = await searchParams;
+  return (
+    <AuthForm
+      action={signUp}
+      googleAction={signInWithGoogle}
+      message={typeof message === "string" ? message : undefined}
+      mode="sign-up"
+      nextPath={normalizeSafeAuthRedirectPath(
+        typeof next === "string" ? next : null,
+      )}
+    />
+  );
 }

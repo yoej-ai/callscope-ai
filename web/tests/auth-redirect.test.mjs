@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { resolveSafeAuthRedirect } from "../lib/auth/redirect-target.mjs";
+import {
+  normalizeSafeAuthRedirectPath,
+  resolveSafeAuthRedirect,
+} from "../lib/auth/redirect-target.mjs";
 
 const CALLBACK_URL = "https://app.example.com/auth/callback?code=test";
 const FALLBACK_URL = "https://app.example.com/dashboard";
@@ -76,5 +79,19 @@ describe("resolveSafeAuthRedirect", () => {
         FALLBACK_URL,
       );
     }
+  });
+
+  it("normalizes a reusable internal path without trusting an origin", () => {
+    assert.equal(
+      normalizeSafeAuthRedirectPath("/dashboard/calls/123?tab=analysis"),
+      "/dashboard/calls/123?tab=analysis",
+    );
+    assert.equal(normalizeSafeAuthRedirectPath("   "), "/dashboard");
+    assert.equal(
+      normalizeSafeAuthRedirectPath("https://evil.example/dashboard"),
+      "/dashboard",
+    );
+    assert.equal(normalizeSafeAuthRedirectPath("//evil.example"), "/dashboard");
+    assert.equal(normalizeSafeAuthRedirectPath("/%"), "/dashboard");
   });
 });

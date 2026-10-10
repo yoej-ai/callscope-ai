@@ -1,6 +1,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { type NextRequest, NextResponse } from "next/server";
 
+import { normalizeSafeAuthRedirectPath } from "@/lib/auth/redirect-target.mjs";
 import { getSupabaseEnv } from "@/lib/supabase/env";
 
 export async function updateSession(request: NextRequest) {
@@ -29,12 +30,16 @@ export async function updateSession(request: NextRequest) {
   );
 
   if (isProtectedRoute && !data?.claims) {
-    const signInUrl = request.nextUrl.clone();
-    signInUrl.pathname = "/sign-in";
+    const signInUrl = new URL("/sign-in", request.url);
     signInUrl.searchParams.set("message", "Please sign in to continue.");
+    signInUrl.searchParams.set(
+      "next",
+      normalizeSafeAuthRedirectPath(
+        `${request.nextUrl.pathname}${request.nextUrl.search}`,
+      ),
+    );
     return NextResponse.redirect(signInUrl);
   }
 
   return response;
 }
-

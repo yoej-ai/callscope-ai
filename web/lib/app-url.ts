@@ -1,5 +1,10 @@
 import "server-only";
 
+import {
+  createAuthCallbackUrl,
+  createGoogleOAuthSignInOptions,
+} from "@/lib/auth/oauth-options.mjs";
+
 const DEVELOPMENT_APP_URL = "http://localhost:3000";
 
 export function getAppUrl(): URL {
@@ -37,6 +42,10 @@ export function getAppUrl(): URL {
   return appUrl;
 }
 
-export function getAuthCallbackUrl(): string {
-  return new URL("/auth/callback", getAppUrl()).toString();
+export function getAuthCallbackUrl(next?: string | null): string {
+  return createAuthCallbackUrl(getAppUrl(), next);
+}
+
+export function getGoogleOAuthOptions(next?: string | null) {
+  return createGoogleOAuthSignInOptions(getAppUrl(), next);
 }

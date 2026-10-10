@@ -21,7 +21,7 @@ deployment remain future work.
 ## Foundation scope
 
 - Next.js 16 App Router frontend with responsive public and authenticated UI
-- Supabase email/password authentication using cookie-backed SSR sessions
+- Google-first Supabase authentication with email/password fallback and cookie-backed SSR sessions
 - Server-side dashboard/onboarding authorization plus session refresh in `proxy.ts`
 - Authenticated workspace onboarding and RLS-backed workspace selection
 - Server-side Next.js integration with the authenticated FastAPI boundary
@@ -153,9 +153,46 @@ RLS-visible ID before its name is displayed. Authentication, identity, workspace
 network, and response-shape failures stop the flow with a safe error; the frontend
 does not silently bypass FastAPI.
 
-Sign-up confirmation always uses `${APP_URL}/auth/callback`; request `Origin` and
-`Host` headers are not trusted. Configure Supabase **Authentication → URL
-Configuration** consistently:
+Google OAuth and email sign-up confirmation both use the centralized
+`${APP_URL}/auth/callback` route; request `Origin` and `Host` headers are not
+trusted. OAuth initiation and authorization-code exchange use the cookie-backed
+PKCE flow from `@supabase/ssr`. The application does not request, store, or expose
+Google provider access or refresh tokens.
+
+The Google button is the primary sign-in option, while the existing email and
+password sign-in and sign-up paths remain available. CallScope does not implement
+custom user merging. Supabase Auth's supported identity-linking behavior remains
+the identity authority; manual linking UI is intentionally outside this phase.
+Before release, validate same-email Google and password accounts against the
+hosted project's provider and identity-linking settings using controlled test
+accounts. Never infer account ownership from an unverified email string.
+
+### Hosted Google authentication configuration
+
+Complete these steps manually for each hosted environment; no provider
+configuration or credentials are committed by this repository:
+
+1. Create a Google OAuth web client for the environment. In Google Cloud, set its
+   authorized redirect URI to the exact Supabase Auth provider callback shown by
+   the Supabase Google provider page, normally
+   `https://<project-ref>.supabase.co/auth/v1/callback` (or the equivalent custom
+   Supabase domain). For local Supabase, the provider callback is normally
+   `http://127.0.0.1:54321/auth/v1/callback`.
+2. Enable Google under **Supabase Authentication → Providers**. Store the Google
+   client ID and client secret only in Google/Supabase provider configuration,
+   never in browser variables, source files, or committed environment files.
+3. Configure **Supabase Authentication → URL Configuration** with the exact Site
+   URL and application callback allowlist for each environment:
+   - local: `http://localhost:3000/auth/callback`
+   - staging: `https://<staging-app-origin>/auth/callback`
+   - production: `https://<production-app-origin>/auth/callback`
+4. Set the server-only `APP_URL` to the matching application origin in each
+   environment. Confirm that OAuth returns through `/auth/callback`, creates the
+   cookie-backed session, and follows the same dashboard/onboarding checks as
+   password users.
+
+Email confirmation uses the same application callback. Configure Supabase
+**Authentication → URL Configuration** consistently:
 
 - Local Site URL: `http://localhost:3000`
 - Local allowed redirect URL: `http://localhost:3000/auth/callback`
