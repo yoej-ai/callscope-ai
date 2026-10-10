@@ -3,6 +3,9 @@
 The numbered pgTAP suites cover the foundation RLS model, private audio ingestion,
 stale upload reconciliation, transcription, the AI-analysis state foundation,
 least-privilege call management, and tenant-safe call-history discovery.
+Playbook coverage adds owner/admin-only draft management, published-only member
+visibility, cross-tenant denial, deterministic concurrency-safe versioning,
+publish validation, immutable published history, and restricted RPC grants.
 The worker-boundary suites exercise auto-queue and backfill behavior, claims,
 wall-clock lease renewal, completion idempotency, bounded structured results,
 retry/failure behavior, tenant reads, column privileges, and worker-only grants.
