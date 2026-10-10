@@ -16,6 +16,9 @@ export function DashboardNav({ email }: DashboardNavProps) {
         <Link className="text-link dashboard-home-link" href="/dashboard">
           Dashboard
         </Link>
+        <Link className="text-link" href="/dashboard/playbooks">
+          Playbooks
+        </Link>
         <span>{email}</span>
         <form action={signOut}>
           <button className="button ghost" type="submit">
