@@ -4,6 +4,7 @@ import { notFound, redirect } from "next/navigation";
 import { CallActions } from "@/components/call-actions";
 import { CallStatusAutoRefresh } from "@/components/call-status-auto-refresh";
 import { DashboardNav } from "@/components/dashboard-nav";
+import { ScoreCallAction } from "@/components/score-call-action";
 import { isUuid } from "@/lib/api/types";
 import {
   callDisplayName,
@@ -12,6 +13,16 @@ import {
   retryableProcessingStage,
 } from "@/lib/call-management.mjs";
 import { humanizeDisplayLabel } from "@/lib/presentation/labels.mjs";
+import {
+  canManageScorecards,
+  scorecardOutcomeLabel,
+  scorecardPresentation,
+  scorecardScoreLabel,
+} from "@/lib/scorecards.mjs";
+import {
+  loadCallScorecard,
+  type CallScorecardDetail,
+} from "@/lib/scorecard-data";
 import { createClient } from "@/lib/supabase/server";
 
 type CallDetailPageProps = {
@@ -749,6 +760,143 @@ function AnalysisPanel({
   );
 }
 
+function ScorecardPanel({
+  callId,
+  workspaceId,
+  configured,
+  eligible,
+  manageable,
+  scorecard,
+  unavailable,
+}: {
+  callId: string;
+  workspaceId: string;
+  configured: boolean;
+  eligible: boolean;
+  manageable: boolean;
+  scorecard: CallScorecardDetail | null;
+  unavailable: boolean;
+}) {
+  if (unavailable) {
+    return (
+      <div className="scorecard-state failed" role="alert">
+        <p className="eyebrow">AI Scorecard</p>
+        <h2>Scorecard temporarily unavailable</h2>
+        <p>Refresh the page to securely reload the scorecard.</p>
+      </div>
+    );
+  }
+
+  const presentation = scorecardPresentation({
+    status: scorecard?.status ?? null,
+    configured,
+    eligible,
+    canManage: manageable,
+  });
+
+  if (presentation.kind === "unconfigured") {
+    return (
+      <div className="scorecard-state">
+        <p className="eyebrow">AI Scorecard</p>
+        <h2>Choose a published Playbook before scoring calls.</h2>
+        <Link
+          className="text-link"
+          href={`/dashboard/playbooks?workspace=${encodeURIComponent(workspaceId)}`}
+        >
+          View Playbooks →
+        </Link>
+      </div>
+    );
+  }
+
+  if (!scorecard) {
+    return (
+      <div className="scorecard-state">
+        <p className="eyebrow">AI Scorecard</p>
+        <h2>{presentation.label}</h2>
+        {presentation.kind === "eligible" ? (
+          <>
+            <p>Evaluate this completed transcript against the active published Playbook.</p>
+            <ScoreCallAction callId={callId} workspaceId={workspaceId} />
+          </>
+        ) : (
+          <p>An owner or admin can score an eligible completed transcript.</p>
+        )}
+      </div>
+    );
+  }
+
+  if (scorecard.status === "queued" || scorecard.status === "processing") {
+    return (
+      <div className={`scorecard-state ${scorecard.status}`} role="status">
+        <p className="eyebrow">AI Scorecard</p>
+        <h2>
+          {scorecard.status === "queued"
+            ? "Waiting for AI scorecard"
+            : `Scoring against ${scorecard.playbookName}`}
+        </h2>
+        <p>
+          Pinned to {scorecard.playbookName}, Version {scorecard.versionNumber}.
+        </p>
+      </div>
+    );
+  }
+
+  if (scorecard.status === "failed") {
+    return (
+      <div className="scorecard-state failed" role="alert">
+        <p className="eyebrow">AI Scorecard</p>
+        <h2>Scorecard could not be completed</h2>
+        <p>The saved call and Playbook are unchanged. Try again later.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="scorecard-result">
+      <div className="scorecard-result-heading">
+        <div>
+          <p className="eyebrow">AI Scorecard</p>
+          <h2>{scorecardScoreLabel(scorecard.overallScore)}</h2>
+          <p>
+            {scorecard.playbookName} · Exact Version {scorecard.versionNumber}
+          </p>
+        </div>
+        {scorecard.reviewRequired && (
+          <span className="scorecard-review-badge">Review required</span>
+        )}
+      </div>
+
+      <ol className="scorecard-criterion-list">
+        {scorecard.criteria.map((criterion) => (
+          <li key={criterion.criterionId}>
+            <span className="scorecard-criterion-position">
+              {criterion.position}
+            </span>
+            <div>
+              <strong>{criterion.name}</strong>
+              <span>{criterion.weight}% weight</span>
+            </div>
+            <span className={`scorecard-outcome ${criterion.outcome}`}>
+              {scorecardOutcomeLabel(criterion.outcome)}
+            </span>
+          </li>
+        ))}
+      </ol>
+
+      <p className="scorecard-note">
+        Outcomes are scored against the pinned immutable Playbook version.
+        Evidence and call snippets are intentionally not included in this phase.
+      </p>
+      {scorecard.completedAt && (
+        <p className="scorecard-timestamp">
+          Completed {formatDate(scorecard.completedAt)}
+        </p>
+      )}
+    </div>
+  );
+}
+
 export default async function CallDetailPage({
   params,
 }: CallDetailPageProps) {
@@ -893,6 +1041,12 @@ export default async function CallDetailPage({
     );
   }
 
+  const scorecardState = await loadCallScorecard(
+    supabase,
+    call.workspaceId,
+    call.id,
+  );
+
   const shouldRefreshCallStatus =
     call.status !== "deleting" && (
       (
@@ -909,6 +1063,8 @@ export default async function CallDetailPage({
           analysis?.status === "processing"
         )
       )
+      || scorecardState.scorecard?.status === "queued"
+      || scorecardState.scorecard?.status === "processing"
     );
 
   const currentStage = processingStage(
@@ -924,6 +1080,11 @@ export default async function CallDetailPage({
     uploadedBy: call.uploadedBy,
     workspaceRole,
   });
+  const scorecardManageable = canManageScorecards(workspaceRole);
+  const scorecardEligible =
+    call.status !== "deleting" &&
+    transcription?.status === "completed" &&
+    Boolean(transcription.transcriptText?.trim());
   const retryStage = retryableProcessingStage({
     callStatus: call.status,
     transcriptionStatus: transcription?.status ?? null,
@@ -1049,6 +1210,21 @@ export default async function CallDetailPage({
                     analysis={analysis}
                     unavailable={analysisUnavailable}
                     transcriptionStatus={transcription?.status ?? null}
+                  />
+                </section>
+
+                <section
+                  className="scorecard-panel"
+                  aria-label="AI Scorecard"
+                >
+                  <ScorecardPanel
+                    callId={call.id}
+                    configured={scorecardState.configuredPlaybookId !== null}
+                    eligible={scorecardEligible}
+                    manageable={scorecardManageable}
+                    scorecard={scorecardState.scorecard}
+                    unavailable={scorecardState.error}
+                    workspaceId={call.workspaceId}
                   />
                 </section>
               </>

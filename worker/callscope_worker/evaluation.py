@@ -17,12 +17,18 @@ from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
+from .scoring import (
+    OUTCOMES as SCORE_OUTCOMES,
+    ScoringValidationError,
+    calculate_weighted_score,
+)
+
 
 PLAYBOOK_SCHEMA_VERSION = "eval_playbook.v1"
 CASE_SCHEMA_VERSION = "eval_case.v1"
 ANNOTATION_SCHEMA_VERSION = "eval_annotation.v1"
 PREDICTION_SCHEMA_VERSION = "eval_prediction.v1"
-OUTCOMES = ("pass", "fail", "not_applicable", "insufficient_evidence")
+OUTCOMES = tuple(sorted(SCORE_OUTCOMES))
 LANGUAGES = ("en", "fil", "en-fil")
 LABEL_SOURCES = ("synthetic_reference", "human")
 
@@ -398,26 +404,25 @@ def reference_score(
     by_id = {label.criterion_id: label for label in labels}
     if set(by_id) != set(playbook.criteria_by_id):
         raise EvaluationValidationError("criterion_labels_incomplete")
-    eligible_weight = 0
-    passed_weight = 0
-    has_insufficient = False
-    for criterion in playbook.criteria:
-        outcome = by_id[criterion.criterion_id].outcome
-        if outcome in {"pass", "fail"}:
-            eligible_weight += criterion.weight
-            if outcome == "pass":
-                passed_weight += criterion.weight
-        elif outcome == "insufficient_evidence":
-            has_insufficient = True
-        elif outcome != "not_applicable":
-            raise EvaluationValidationError("outcome_invalid")
-    if eligible_weight == 0:
-        return None, True, False
+    try:
+        result = calculate_weighted_score(
+            {
+                criterion.criterion_id: criterion.weight
+                for criterion in playbook.criteria
+            },
+            {
+                criterion_id: label.outcome
+                for criterion_id, label in by_id.items()
+            },
+        )
+    except ScoringValidationError as exc:
+        raise EvaluationValidationError("outcome_invalid") from exc
     value = (
-        Decimal(passed_weight) * Decimal(100) / Decimal(eligible_weight)
-    ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-    review_needed = has_insufficient
-    return float(value), review_needed, not review_needed
+        float(result.overall_score)
+        if result.overall_score is not None
+        else None
+    )
+    return value, result.review_required, not result.review_required
 
 
 def validate_case(payload: object, playbook: EvaluationPlaybook) -> EvaluationCase:

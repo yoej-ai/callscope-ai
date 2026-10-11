@@ -1,6 +1,8 @@
 import Link from "next/link";
 
+import { setScorecardPlaybook } from "@/app/dashboard/playbooks/actions";
 import { DashboardNav } from "@/components/dashboard-nav";
+import { PlaybookPendingButton } from "@/components/playbook-controls";
 import {
   canManagePlaybooks,
   playbookVersionLabel,
@@ -28,6 +30,7 @@ const NOTICES: Record<string, string> = {
   "criterion-moved": "Criterion order updated.",
   published: "Playbook version published and locked.",
   "version-created": "A new editable version was created.",
+  "scorecard-selected": "Active AI Scorecard Playbook updated for future calls.",
 };
 
 const ERRORS: Record<string, string> = {
@@ -67,6 +70,21 @@ export default async function PlaybooksPage({
     context.supabase,
     context.activeWorkspace.id,
   );
+  const { data: scorecardSetting, error: scorecardSettingError } =
+    await context.supabase
+      .from("workspace_scorecard_settings")
+      .select("playbook_id")
+      .eq("workspace_id", context.activeWorkspace.id)
+      .maybeSingle();
+  if (scorecardSettingError) {
+    console.error("Unable to load active scorecard Playbook", {
+      code: scorecardSettingError.code,
+    });
+  }
+  const activeScorecardPlaybookId =
+    typeof scorecardSetting?.playbook_id === "string"
+      ? scorecardSetting.playbook_id
+      : null;
   const canManage = canManagePlaybooks(context.role);
   const notice =
     typeof parameters.notice === "string" ? NOTICES[parameters.notice] : null;
@@ -82,8 +100,8 @@ export default async function PlaybooksPage({
             <p className="eyebrow">Evaluation foundations</p>
             <h1>Playbooks</h1>
             <p className="lede">
-              Define the exact, versioned criteria your team will use when call
-              scoring is introduced.
+              Define the exact, versioned criteria used by your team’s AI
+              Scorecards.
             </p>
           </div>
           {canManage && (
@@ -160,6 +178,20 @@ export default async function PlaybooksPage({
             )}
           </section>
         ) : (
+          <>
+          <section className="scorecard-config-panel" aria-labelledby="scorecard-config-title">
+            <div>
+              <p className="eyebrow">AI Scorecard configuration</p>
+              <h2 id="scorecard-config-title">Choose one active Playbook</h2>
+              <p>
+                Future scorecards pin the newest published version of the active
+                Playbook. Existing scorecards always keep their original version.
+              </p>
+            </div>
+            <span className={`scorecard-config-status ${activeScorecardPlaybookId ? "active" : "inactive"}`}>
+              {activeScorecardPlaybookId ? "Configured" : "Not configured"}
+            </span>
+          </section>
           <section className="playbook-grid" aria-label="Workspace playbooks">
             {playbooks.map((playbook) => {
               const latest = playbook.versions.at(-1);
@@ -167,11 +199,20 @@ export default async function PlaybooksPage({
               const publishedCount = playbook.versions.filter(
                 (version) => version.status === "published",
               ).length;
+              const activeForScorecards =
+                activeScorecardPlaybookId === playbook.id;
               return (
                 <article className="playbook-card" key={playbook.id}>
                   <div className="playbook-card-topline">
-                    <span className={`version-badge ${latest.status}`}>
-                      {latest.status === "draft" ? "Draft" : "Published"}
+                    <span className="playbook-card-badges">
+                      <span className={`version-badge ${latest.status}`}>
+                        {latest.status === "draft" ? "Draft" : "Published"}
+                      </span>
+                      {activeForScorecards && (
+                        <span className="active-scorecard-badge">
+                          Active scorecard Playbook
+                        </span>
+                      )}
                     </span>
                     <span>{humanizeDisplayLabel(latest.vertical)}</span>
                   </div>
@@ -197,10 +238,22 @@ export default async function PlaybooksPage({
                       ? "Continue editing →"
                       : "View playbook →"}
                   </Link>
+                  {canManage && publishedCount > 0 && !activeForScorecards && (
+                    <form action={setScorecardPlaybook} className="scorecard-playbook-form">
+                      <input name="workspaceId" type="hidden" value={context.activeWorkspace.id} />
+                      <input name="playbookId" type="hidden" value={playbook.id} />
+                      <PlaybookPendingButton
+                        className="button secondary small"
+                        idleLabel="Use for AI scorecards"
+                        pendingLabel="Updating..."
+                      />
+                    </form>
+                  )}
                 </article>
               );
             })}
           </section>
+          </>
         )}
       </main>
     </div>

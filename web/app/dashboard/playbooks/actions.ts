@@ -19,7 +19,8 @@ type Notice =
   | "criterion-removed"
   | "criterion-moved"
   | "published"
-  | "version-created";
+  | "version-created"
+  | "scorecard-selected";
 type ActionError =
   | "invalid"
   | "not-authorized"
@@ -373,5 +374,38 @@ export async function createNextPlaybookVersion(formData: FormData) {
     `${playbookDetailPath(workspaceId, playbookId, {
       notice: "version-created",
     })}#draft-editor-title`,
+  );
+}
+
+export async function setScorecardPlaybook(formData: FormData) {
+  const workspaceId = stringField(formData, "workspaceId");
+  const playbookId = stringField(formData, "playbookId");
+  if (!isPlaybookUuid(workspaceId) || !isPlaybookUuid(playbookId)) {
+    redirect("/dashboard/playbooks?error=invalid");
+  }
+
+  const supabase = await authenticatedClient();
+  const { data, error } = await supabase.rpc(
+    "set_workspace_scorecard_playbook",
+    {
+      p_workspace_id: workspaceId,
+      p_playbook_id: playbookId,
+    },
+  );
+  const row = Array.isArray(data) && data.length === 1 ? data[0] : null;
+  if (
+    error ||
+    !isRecord(row) ||
+    row.workspace_id !== workspaceId ||
+    row.playbook_id !== playbookId
+  ) {
+    console.error("Scorecard Playbook selection failed", {
+      code: error?.code ?? "invalid-response",
+    });
+    redirect(playbookListPath(workspaceId, { error: "save-failed" }));
+  }
+
+  redirect(
+    playbookListPath(workspaceId, { notice: "scorecard-selected" }),
   );
 }

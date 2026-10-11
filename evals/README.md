@@ -82,8 +82,10 @@ The deterministic helper uses the playbook weights:
 6. With no eligible `pass`/`fail` weight, score is `null`, the result is
    incomplete, and review is required.
 
-This score is an offline reference calculation only and is never persisted to
-production.
+Phase 9A production scoring reuses and cross-tests this same deterministic
+calculation, while the production completion RPC independently calculates the
+persisted value in the database. The synthetic fixture scores remain offline
+reference values and are not accuracy evidence.
 
 ## Validate locally
 

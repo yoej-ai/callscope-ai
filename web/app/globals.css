@@ -200,6 +200,15 @@ h1, h2, h3, p { margin-top: 0; }
 .playbook-message.success { background: var(--success-bg); border-color: #c9ddbe; color: var(--forest-dark); }
 .playbook-message.error { background: var(--danger-bg); border-color: #e8c4bb; color: #7d2b1b; }
 .playbook-grid { display: grid; gap: 18px; grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 30px; }
+.scorecard-config-panel { align-items: center; background: var(--forest-dark); border-radius: var(--radius-md); color: white; display: flex; gap: 28px; justify-content: space-between; margin: 28px 0 22px; padding: 22px 24px; }
+.scorecard-config-panel h2 { color: white; font-size: 1.35rem; margin: 5px 0 7px; }
+.scorecard-config-panel p { color: #d6e4dc; line-height: 1.5; margin-bottom: 0; max-width: 760px; }
+.scorecard-config-status, .active-scorecard-badge { border-radius: 999px; font-size: .72rem; font-weight: 800; white-space: nowrap; }
+.scorecard-config-status { background: rgba(255,255,255,.12); padding: 8px 11px; }
+.scorecard-config-status.active, .active-scorecard-badge { background: var(--lime); color: var(--forest-dark); }
+.playbook-card-badges { align-items: center; display: flex; flex-wrap: wrap; gap: 7px; }
+.active-scorecard-badge { padding: 6px 9px; }
+.scorecard-playbook-form { border-top: 1px solid var(--line); margin-top: 16px; padding-top: 16px; }
 .playbook-card { background: var(--surface); border: 1px solid var(--line); border-radius: 22px; box-shadow: var(--shadow-soft); min-width: 0; padding: 24px; transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease; }
 .playbook-card:hover, .playbook-card:focus-within { border-color: var(--line-strong); box-shadow: 0 18px 42px rgba(20, 47, 36, .1); transform: translateY(-2px); }
 .playbook-card-topline { align-items: center; color: var(--muted); display: flex; font-size: .78rem; justify-content: space-between; text-transform: capitalize; }
@@ -498,6 +507,31 @@ h1, h2, h3, p { margin-top: 0; }
 .call-deletion-panel { padding: clamp(34px, 7vw, 70px) clamp(28px, 5vw, 48px); }
 .call-deletion-panel h2 { font-size: clamp(1.7rem, 4vw, 2.5rem); letter-spacing: -.045em; margin: 9px 0 12px; }
 .call-deletion-panel > p:last-child { color: var(--muted); line-height: 1.65; margin-bottom: 0; max-width: 650px; }
+.scorecard-panel { border-top: 1px solid var(--line); padding: clamp(28px, 5vw, 44px); }
+.scorecard-state { background: var(--paper); border: 1px solid var(--line); border-radius: 18px; padding: clamp(20px, 4vw, 30px); }
+.scorecard-state h2 { font-size: clamp(1.45rem, 3vw, 2rem); margin: 7px 0 10px; }
+.scorecard-state > p:last-child { color: var(--muted); line-height: 1.55; margin-bottom: 0; }
+.scorecard-state.queued, .scorecard-state.processing { border-color: #c6d9ce; }
+.scorecard-state.failed { background: var(--danger-bg); border-color: #e8c4bb; }
+.score-call-action { align-items: flex-start; display: flex; flex-direction: column; gap: 9px; margin-top: 18px; }
+.score-call-action p { color: var(--muted); font-size: .84rem; margin: 0; }
+.scorecard-result-heading { align-items: flex-start; display: flex; gap: 24px; justify-content: space-between; }
+.scorecard-result-heading h2 { font-size: clamp(2.3rem, 6vw, 4.2rem); letter-spacing: -.055em; margin: 7px 0; }
+.scorecard-result-heading p:last-child { color: var(--muted); margin-bottom: 0; }
+.scorecard-review-badge { background: var(--warning-bg); border: 1px solid #e1c77d; border-radius: 999px; color: #69470a; font-size: .76rem; font-weight: 850; padding: 8px 11px; white-space: nowrap; }
+.scorecard-criterion-list { display: grid; gap: 10px; list-style: none; margin: 28px 0 0; padding: 0; }
+.scorecard-criterion-list li { align-items: center; background: var(--paper); border: 1px solid var(--line); border-radius: 14px; display: grid; gap: 13px; grid-template-columns: auto minmax(0, 1fr) auto; padding: 14px 16px; }
+.scorecard-criterion-position { align-items: center; background: var(--forest-soft); border-radius: 50%; color: var(--forest-dark); display: inline-flex; font-size: .78rem; font-weight: 850; height: 30px; justify-content: center; width: 30px; }
+.scorecard-criterion-list li > div { display: grid; gap: 4px; min-width: 0; }
+.scorecard-criterion-list li > div strong { overflow-wrap: anywhere; }
+.scorecard-criterion-list li > div span { color: var(--muted); font-size: .78rem; }
+.scorecard-outcome { border-radius: 999px; font-size: .74rem; font-weight: 850; padding: 7px 10px; white-space: nowrap; }
+.scorecard-outcome.pass { background: var(--success-bg); color: var(--forest-dark); }
+.scorecard-outcome.fail { background: var(--danger-bg); color: var(--danger); }
+.scorecard-outcome.not_applicable { background: #ece8df; color: var(--muted); }
+.scorecard-outcome.insufficient_evidence { background: var(--warning-bg); color: #69470a; }
+.scorecard-note { background: var(--forest-soft); border-radius: 12px; color: var(--forest-dark); font-size: .82rem; line-height: 1.5; margin: 20px 0 0; padding: 12px 14px; }
+.scorecard-timestamp { color: var(--muted); font-size: .8rem; margin: 16px 0 0; }
 
 .onboarding-main { align-items: center; display: flex; justify-content: center; min-height: calc(100vh - 94px); padding: 48px 28px; }
 .onboarding-card { background: var(--surface); border: 1px solid var(--line); border-radius: 28px; box-shadow: var(--shadow); max-width: 560px; padding: clamp(30px, 6vw, 58px); width: 100%; }
@@ -525,6 +559,7 @@ h1, h2, h3, p { margin-top: 0; }
   .insight-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .insight-grid section:last-child { grid-column: 1 / -1; }
   .playbooks-header, .playbook-detail-header { align-items: flex-start; flex-direction: column; }
+  .scorecard-config-panel { align-items: flex-start; flex-direction: column; }
   .metadata-form { grid-template-columns: 1fr 1fr; }
   .metadata-form .button { grid-column: 1 / -1; justify-self: start; }
   .playbook-grid { grid-template-columns: 1fr; }
@@ -563,6 +598,9 @@ h1, h2, h3, p { margin-top: 0; }
   .dialog-actions .button { width: 100%; }
   .insight-grid { grid-template-columns: 1fr; }
   .insight-grid section:last-child { grid-column: auto; }
+  .scorecard-result-heading { flex-direction: column; }
+  .scorecard-criterion-list li { align-items: start; grid-template-columns: auto minmax(0, 1fr); }
+  .scorecard-outcome { grid-column: 2; justify-self: start; }
   .playbooks-header .button, .playbook-detail-header .button { width: 100%; }
   .playbook-workspace-bar, .playbook-workspace-bar form { align-items: stretch; flex-direction: column; }
   .playbook-workspace-bar form .button { width: 100%; }

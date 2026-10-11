@@ -5,10 +5,10 @@ support teams. It is designed to turn customer conversations into secure,
 searchable summaries, intent, sentiment, objections, scores, and action items.
 
 This repository contains the security-oriented local MVP foundation, private
-tenant-authorized audio ingestion, transcription and AI-analysis state machines,
-isolated transcription and analysis workers, a unified local supervisor, and a
-tenant-safe Call Detail experience. The source implements the complete upload,
-transcription, analysis, and structured-insights flow. Repository history
+tenant-authorized audio ingestion, transcription, AI-analysis, and custom
+scorecard state machines, isolated trusted workers, a unified local supervisor,
+and a tenant-safe Call Detail experience. The source implements the upload,
+transcription, analysis, structured-insights, and scorecard flow. Repository history
 records hosted end-to-end
 validation of both the secure transcription and AI-analysis paths; that evidence
 does not mean the local workers are always running or that an external hosted
@@ -422,10 +422,31 @@ local Ollama/model preflight before claiming a job so a stopped Ollama process o
 missing configured model does not consume an analysis attempt. Normal INFO logs
 from `httpx` and `httpcore` are suppressed to avoid unnecessary request metadata.
 
+### Custom AI scorecards
+
+Phase 9A lets an owner or admin select one stable published Playbook identity for
+future workspace scorecards. Each new scorecard resolves and permanently pins
+the newest published version at creation time, so later publications or setting
+changes cannot rewrite historical scoring attribution. A bounded manager-only
+action can idempotently queue eligible historical completed calls.
+
+The dedicated scorecard worker treats transcripts and Playbook criteria as
+untrusted data and asks local Ollama only for the four supported criterion
+outcomes. The model supplies no numeric score, evidence, or hidden reasoning.
+The service-role-only completion RPC validates the exact criterion set and
+calculates the weighted score in the database using the Phase 8B contract.
+Evidence snippets and timestamps are intentionally deferred. The synthetic
+evaluation dataset is not a human-reviewed benchmark, so no accuracy claim is
+made.
+
+The Phase 9A migration has been validated only against local Supabase and has
+not been deployed to the hosted project. The worker remains a local/manual
+process rather than an always-on hosted scoring service.
+
 ### Local worker orchestration
 
 Phase 5B adds `callscope-worker`, the current local MVP operating strategy for
-running transcription and analysis together:
+running transcription, analysis, and scorecard processing together:
 
 ```bash
 cd worker
@@ -449,7 +470,7 @@ URLs, or authorization headers.
 
 Ctrl+C or a supported termination signal stops idle/backoff waits immediately,
 prevents another processing iteration after shutdown is observed, waits for
-in-flight work to finish safely, and closes both pipelines' HTTP clients without
+in-flight work to finish safely, and closes all pipelines' HTTP clients without
 a normal-shutdown traceback. The original one-shot commands
 `callscope-transcribe` and `callscope-analyze`, plus their independent `--loop`
 modes, remain available.
@@ -512,6 +533,9 @@ The migration creates:
 - `calls`: workspace-scoped call metadata and processing state
 - `call_transcriptions`: one RLS-protected transcript state/result per eligible call
 - `call_analyses`: one RLS-protected structured analysis state/result per completed transcript
+- `workspace_scorecard_settings`: one stable Playbook selection per workspace
+- `call_scorecards`: one canonical, version-pinned scorecard lifecycle per call
+- `call_scorecard_results`: one validated outcome per pinned criterion
 - `usage_events`: append-only usage/telemetry records for later metering
 
 Foreign keys define deliberate delete behavior. Checks reject blank names and
@@ -579,7 +603,7 @@ before running `supabase db push`. The migration changes authentication triggers
 grants, and RLS policies, so apply it first in a non-production environment.
 
 The repository contains versioned migrations through
-`20261010000000_ai_analysis_foundation.sql`. Repository history records hosted
+`20261014000000_custom_ai_scorecard.sql`. Repository history records hosted
 end-to-end validation of both transcription and AI analysis, but hosted project
 state is external to this source tree and may change. Verify the live migration
 history and target independently before applying changes; do not infer current
