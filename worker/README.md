@@ -1,8 +1,8 @@
 # CallScope AI — local worker orchestration
 
 This trusted local worker is not a frontend feature or public FastAPI endpoint.
-The `callscope-worker` supervisor runs the transcription, generic AI-analysis,
-and custom scorecard pipelines together while keeping their resources and
+The `callscope-worker` supervisor runs transcription, generic AI analysis,
+custom scorecard, and speaker-attribution pipelines together while keeping their resources and
 failure handling isolated.
 It reuses the existing one-job processing functions and service-role-only RPCs;
 it does not bypass claim tokens, leases, heartbeats, retry state, or RLS.
@@ -13,6 +13,8 @@ it does not bypass claim tokens, leases, heartbeats, retry state, or RLS.
 - Supabase database with the transcription, analysis, Playbook, and scorecard
   migrations applied
 - CPU and disk space for the free Whisper model
+- Optional `diarization` extra plus CPU and disk space for the free gated
+  `pyannote/speaker-diarization-community-1` model
 - Local Ollama listening only on loopback, with `qwen3:4b-instruct` available
 - Worker-only `SUPABASE_SECRET_KEY` in the private worker environment, or a
   legacy `SUPABASE_SERVICE_ROLE_KEY` JWT for backward compatibility
@@ -21,7 +23,7 @@ it does not bypass claim tokens, leases, heartbeats, retry state, or RLS.
 ## Setup (from worker/)
 
 1. Create virtual environment: python -m venv .venv
-2. Activate .venv, then install: python -m pip install -e ".[speech,dev]"
+2. Activate .venv, then install: python -m pip install -e ".[speech,diarization,dev]"
 3. Install FFmpeg (including ffprobe) via the OS package manager.
 4. Install Ollama locally and run `ollama pull qwen3:4b-instruct`.
 5. Supply private process environment variables `SUPABASE_URL`, the preferred
@@ -32,13 +34,17 @@ it does not bypass claim tokens, leases, heartbeats, retry state, or RLS.
    values. `OLLAMA_BASE_URL` defaults to the loopback-only
    `http://127.0.0.1:11434`, and `OLLAMA_MODEL` defaults to
    `qwen3:4b-instruct`.
-6. Start all three continuous pipelines on the trusted local machine:
+6. Accept the Community-1 model terms and provide a read-only `HF_TOKEN` only
+   in the private worker environment for the initial download. For offline use,
+   set `PYANNOTE_MODEL` to an existing absolute local model directory. Telemetry
+   is forcibly disabled by the worker.
+7. Start all four continuous pipelines on the trusted local machine:
 
    ```text
    callscope-worker
    ```
 
-7. Press Ctrl+C to stop all three pipelines cleanly.
+8. Press Ctrl+C to stop all four pipelines cleanly.
 
 The supervisor polls empty queues every 30 seconds by default. Infrastructure
 failures retry independently with exponential backoff from 5 seconds up to a
@@ -52,6 +58,30 @@ other pipelines continue. Supabase or transcription-side infrastructure failure
 is likewise contained to the transcription loop while healthy model pipelines
 continue. Failures are logged using only the pipeline name, bounded error code,
 and retry delay.
+
+## Phase 9B speaker attribution
+
+Speaker attribution is deliberately separate from transcription. A completed
+transcript remains authoritative and readable even if diarization is not
+installed, the gated model is unavailable, or speaker processing fails. New
+legitimate transcription completions enqueue one canonical speaker job; owners
+and admins may safely queue an eligible historical call without supplying a
+Storage path, labels, or worker metadata.
+
+The approved Community-1 pyannote model runs locally on CPU and prefers its
+exclusive diarization output. The worker never uses pyannoteAI or another cloud
+diarization API. It deterministically aligns anonymous speaker intervals to the
+existing Whisper segment timestamps and keeps ambiguous assignments unknown.
+A bounded local Ollama request may map anonymous clusters to `agent` or
+`customer`; invalid, uncertain, or unavailable role mapping leaves them as
+stable anonymous speakers. Neither step rewrites transcript words.
+
+Only derived timestamped turns are stored. Raw audio, transcript copies, model
+responses, reasoning, credentials, and internal errors are not persisted in the
+turn table. Completion is atomic and the database independently validates the
+active lease, exact call, bounded complete ordinals, timing, text, speaker keys,
+and allowed roles. Stable database-generated turn IDs are reserved for a later
+explainable-evidence phase.
 
 ## Phase 9A custom scorecards
 
@@ -80,8 +110,19 @@ the database remains authoritative for production persistence.
 
 This feature makes no model-accuracy claim. The repository evaluation dataset
 is synthetic and is not a human-reviewed production benchmark.
-The Phase 9A migration and scorecard feature are repository/local-only at this
-review point; they have not been deployed to hosted Supabase.
+The Phase 9A migration and scorecard feature have been deployed and smoke-tested
+on hosted Supabase. The Phase 9B speaker-attribution migration remains local-only
+at this review point and has not been deployed to hosted Supabase.
+
+When local Ollama is already available, the clearly separated synthetic
+applicability smoke can be run from `worker/` with:
+
+```text
+python manual/scorecard_applicability_smoke.py
+```
+
+It checks no-objection, handled-objection, mishandled-objection, and incomplete
+transcript outcomes. It is not part of CI and is not an accuracy benchmark.
 
 Common startup and preflight codes are deliberately safe and actionable:
 
@@ -94,6 +135,8 @@ Common startup and preflight codes are deliberately safe and actionable:
 | `analysis_configuration_invalid` | Restore the loopback-only Ollama URL and a valid local model identifier. |
 | `ollama_unavailable` | Start local Ollama; transcription continues independently. |
 | `ollama_model_unavailable` | Run `ollama pull qwen3:4b-instruct`, or pull the safely configured local model. |
+| `diarization_dependencies_unavailable` | Install the optional `diarization` extra without changing the constrained speech extra. |
+| `diarization_model_unavailable` | Accept the Community-1 terms, provide a worker-only read token for initial download, or configure a cached absolute local model directory. |
 
 The supervisor never appends exception messages or configuration values to
 these logs. Repeated failures retain the capped backoff and do not become a
@@ -119,6 +162,10 @@ The speech extra intentionally constrains PyAV to `>=11,<19`: the current
 Faster-Whisper integration uses an `av.open` API that is incompatible with
 PyAV 19. This is a compatibility constraint, not a security downgrade; do not
 remove it until upstream compatibility has been verified.
+
+The diarization extra is optional and does not alter the speech extra or its
+PyAV constraint. Pyannote 4 uses Torch/TorchAudio/TorchCodec and does not declare
+PyAV, so the dependency sets can coexist without upgrading the working decoder.
 
 Faster-Whisper remains responsible for multilingual transcription and language
 detection. The worker stores a normalized language code only when the model's
@@ -148,7 +195,7 @@ Both credential types belong only in this trusted server-side worker runtime.
 - Lease renewed every 60 seconds, completion requires current claim token.
 - SQL limits processing attempts to three and retry delay to five minutes.
 - Analysis checks local Ollama and the configured model before claiming work.
-- The supervisor isolates all three loops and caps infrastructure retry backoff.
+- The supervisor isolates all four loops and caps infrastructure retry backoff.
 - Logs only status and safe machine-readable error codes, not transcripts,
   prompts, raw model responses, private audio, sensitive authorization headers,
   URLs, or HTTP response bodies. No hidden reasoning is persisted.

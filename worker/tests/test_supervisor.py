@@ -16,6 +16,7 @@ from callscope_worker.scorecard_worker import (
     ScorecardLeaseHeartbeat,
     ScorecardWorkerError,
 )
+from callscope_worker.speaker_worker import SpeakerLeaseHeartbeat, SpeakerWorkerError
 from callscope_worker.supervisor import (
     LoopConfig,
     PipelineSpec,
@@ -49,13 +50,14 @@ class RecordingStop:
         return len(self.waits) >= self.stop_after_waits
 
 
-def test_supervisor_runs_and_closes_all_three_pipelines() -> None:
+def test_supervisor_runs_and_closes_all_four_pipelines() -> None:
     stop = threading.Event()
-    barrier = threading.Barrier(3)
+    barrier = threading.Barrier(4)
     processed = {
         "transcription": threading.Event(),
         "analysis": threading.Event(),
         "scorecard": threading.Event(),
+        "speaker-attribution": threading.Event(),
     }
     runtimes: dict[str, FakeRuntime] = {}
 
@@ -95,6 +97,7 @@ def test_heartbeat_shutdown_waits_for_active_renewal_thread() -> None:
         LeaseHeartbeat,
         AnalysisLeaseHeartbeat,
         ScorecardLeaseHeartbeat,
+        SpeakerLeaseHeartbeat,
     ):
         renewal_started = threading.Event()
         release_renewal = threading.Event()
@@ -223,6 +226,32 @@ def test_scorecard_startup_reports_scorecard_specific_configuration_code(
     assert sensitive_message not in str(error.value)
 
 
+def test_speaker_startup_reports_safe_diarization_configuration_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sensitive_message = "private model path and token material"
+    monkeypatch.setattr(
+        supervisor.Settings,
+        "from_env",
+        staticmethod(lambda: object()),
+    )
+
+    def invalid_diarization_settings():
+        raise ValueError(sensitive_message)
+
+    monkeypatch.setattr(
+        supervisor.DiarizationSettings,
+        "from_env",
+        staticmethod(invalid_diarization_settings),
+    )
+
+    with pytest.raises(supervisor.PipelineStartupError) as error:
+        supervisor._SpeakerAttributionRuntime.open(heartbeat_interval_seconds=60)
+
+    assert error.value.code == "diarization_configuration_invalid"
+    assert sensitive_message not in str(error.value)
+
+
 @pytest.mark.parametrize(
     ("failing_pipeline", "failure"),
     [
@@ -237,6 +266,10 @@ def test_scorecard_startup_reports_scorecard_specific_configuration_code(
         (
             "scorecard",
             ScorecardWorkerError("scorecard_rpc_unavailable", retryable=True),
+        ),
+        (
+            "speaker-attribution",
+            SpeakerWorkerError("speaker_rpc_unavailable", retryable=True),
         ),
     ],
 )

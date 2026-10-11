@@ -5,6 +5,7 @@ import { CallActions } from "@/components/call-actions";
 import { CallStatusAutoRefresh } from "@/components/call-status-auto-refresh";
 import { DashboardNav } from "@/components/dashboard-nav";
 import { ScoreCallAction } from "@/components/score-call-action";
+import { SpeakerAttributionAction } from "@/components/speaker-attribution-action";
 import { isUuid } from "@/lib/api/types";
 import {
   callDisplayName,
@@ -23,6 +24,15 @@ import {
   loadCallScorecard,
   type CallScorecardDetail,
 } from "@/lib/scorecard-data";
+import {
+  loadSpeakerAttribution,
+  type SpeakerAttributionDetail,
+} from "@/lib/speaker-data";
+import {
+  canManageSpeakerAttribution,
+  formatTranscriptTimestamp,
+  speakerDisplayLabel,
+} from "@/lib/speaker-turns.mjs";
 import { createClient } from "@/lib/supabase/server";
 
 type CallDetailPageProps = {
@@ -443,9 +453,19 @@ function ActiveProcessingState({
 function TranscriptionPanel({
   transcription,
   unavailable,
+  speakerAttribution,
+  speakerUnavailable,
+  canAddSpeakerLabels,
+  callId,
+  workspaceId,
 }: {
   transcription: TranscriptionDetail | null;
   unavailable: boolean;
+  speakerAttribution: SpeakerAttributionDetail | null;
+  speakerUnavailable: boolean;
+  canAddSpeakerLabels: boolean;
+  callId: string;
+  workspaceId: string;
 }) {
   if (unavailable) {
     return (
@@ -527,9 +547,70 @@ function TranscriptionPanel({
         </span>
       </div>
 
-      <p className="transcript-text">
-        {transcription.transcriptText}
-      </p>
+      {speakerAttribution?.status === "completed" ? (
+        <>
+          <ol className="transcript-turns" aria-label="Speaker-attributed transcript">
+            {speakerAttribution.turns.map((turn) => (
+              <li className={`speaker-${turn.speakerRole}`} key={turn.id}>
+                <header>
+                  <strong>
+                    {speakerDisplayLabel(turn.speakerRole, turn.speakerKey)}
+                  </strong>
+                  <time>
+                    {formatTranscriptTimestamp(turn.startMs)}–
+                    {formatTranscriptTimestamp(turn.endMs)}
+                  </time>
+                </header>
+                <p>{turn.text}</p>
+              </li>
+            ))}
+          </ol>
+          <details className="plain-transcript-fallback">
+            <summary>View plain transcript</summary>
+            <p className="transcript-text">{transcription.transcriptText}</p>
+          </details>
+        </>
+      ) : (
+        <p className="transcript-text">{transcription.transcriptText}</p>
+      )}
+
+      {speakerUnavailable && (
+        <div className="speaker-label-state failed" role="status">
+          <strong>Speaker labels unavailable</strong>
+          <span>The original transcript remains available.</span>
+        </div>
+      )}
+
+      {!speakerUnavailable && speakerAttribution?.status === "queued" && (
+        <div className="speaker-label-state queued" role="status">
+          <span className="activity-indicator" aria-hidden="true" />
+          <div>
+            <strong>Preparing speaker labels</strong>
+            <span>The transcript remains available while the local worker waits.</span>
+          </div>
+        </div>
+      )}
+
+      {!speakerUnavailable && speakerAttribution?.status === "processing" && (
+        <div className="speaker-label-state processing" role="status">
+          <span className="activity-indicator" aria-hidden="true" />
+          <div>
+            <strong>Identifying speakers</strong>
+            <span>The local diarization model is processing this recording.</span>
+          </div>
+        </div>
+      )}
+
+      {!speakerUnavailable && speakerAttribution?.status === "failed" && (
+        <div className="speaker-label-state failed" role="status">
+          <strong>Speaker labels could not be prepared</strong>
+          <span>The completed plain transcript is unchanged and remains readable.</span>
+        </div>
+      )}
+
+      {!speakerUnavailable && !speakerAttribution && canAddSpeakerLabels && (
+        <SpeakerAttributionAction callId={callId} workspaceId={workspaceId} />
+      )}
 
       {transcription.completedAt && (
         <p className="transcript-timestamp">
@@ -1046,6 +1127,7 @@ export default async function CallDetailPage({
     call.workspaceId,
     call.id,
   );
+  const speakerState = await loadSpeakerAttribution(supabase, call.id);
 
   const shouldRefreshCallStatus =
     call.status !== "deleting" && (
@@ -1065,6 +1147,8 @@ export default async function CallDetailPage({
       )
       || scorecardState.scorecard?.status === "queued"
       || scorecardState.scorecard?.status === "processing"
+      || speakerState.attribution?.status === "queued"
+      || speakerState.attribution?.status === "processing"
     );
 
   const currentStage = processingStage(
@@ -1081,6 +1165,13 @@ export default async function CallDetailPage({
     workspaceRole,
   });
   const scorecardManageable = canManageScorecards(workspaceRole);
+  const speakerManageable = canManageSpeakerAttribution(workspaceRole);
+  const speakerEligible =
+    call.status !== "deleting" &&
+    transcription?.status === "completed" &&
+    Boolean(transcription.transcriptText?.trim()) &&
+    call.durationSeconds !== null &&
+    call.durationSeconds > 0;
   const scorecardEligible =
     call.status !== "deleting" &&
     transcription?.status === "completed" &&
@@ -1197,8 +1288,13 @@ export default async function CallDetailPage({
                   aria-label="Transcription"
                 >
                   <TranscriptionPanel
+                    callId={call.id}
+                    canAddSpeakerLabels={speakerManageable && speakerEligible}
+                    speakerAttribution={speakerState.attribution}
+                    speakerUnavailable={speakerState.error}
                     transcription={transcription}
                     unavailable={transcriptionUnavailable}
+                    workspaceId={call.workspaceId}
                   />
                 </section>
 

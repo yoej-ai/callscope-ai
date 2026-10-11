@@ -13,6 +13,7 @@ dependencies = [
 
 [project.optional-dependencies]
 speech = ["faster-whisper>=1.1,<2.0", "av>=11,<19"]
+diarization = ["pyannote.audio>=4.0.3,<5.0"]
 dev = ["pytest>=8.4,<10.0"]
 
 [project.scripts]

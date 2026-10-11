@@ -19,6 +19,11 @@ Custom-scorecard coverage adds stable workspace Playbook selection, exact
 published-version pinning, automatic and manual idempotent queueing, tenant RLS,
 least-privilege grants, claim/lease/retry behavior, strict exact-set completion,
 database-authoritative weighted scoring, and the four Phase 8B outcomes.
+Speaker-attribution coverage adds no-backfill future auto-queueing, owner/admin
+historical queueing, exact private-object eligibility, isolated claim/lease/retry
+lifecycle, atomic bounded turn validation, stable turn IDs, authoritative plain
+transcript preservation, tenant-only completed reads, and browser-private worker
+metadata.
 
 Run it after installing Docker and the Supabase CLI:
 

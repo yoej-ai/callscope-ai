@@ -8,6 +8,7 @@ import pytest
 
 from callscope_worker.ollama import OllamaError, OllamaSettings
 from callscope_worker.scorecard import (
+    SCORECARD_SYSTEM_PROMPT,
     OllamaScorecardAnalyzer,
     ScorecardValidationError,
     parse_scorecard_content,
@@ -112,6 +113,47 @@ def test_scorecard_output_accepts_only_exact_outcomes() -> None:
         [CRITERION_ONE, CRITERION_TWO],
     )
     assert result.to_rpc_payload()[1]["outcome"] == "insufficient_evidence"
+
+
+def test_scorecard_prompt_requires_applicability_before_pass_or_fail() -> None:
+    normalized = " ".join(SCORECARD_SYSTEM_PROMPT.lower().split())
+    assert "first decide whether the criterion actually applied" in normalized
+    assert "apply this decision order for conditional criteria" in normalized
+    assert "objection handling criterion is not_applicable" in normalized
+    assert "customer raised no objection" in normalized
+    assert "affirmative transcript evidence" in normalized
+    assert "absence of a failure is never enough for pass" in normalized
+    assert "handled incorrectly" in normalized
+    assert "insufficient_evidence" in normalized
+    assert "incomplete or cut-off exchange" in normalized
+    assert "uncertainty automatically to fail or not_applicable" in normalized
+
+
+@pytest.mark.parametrize(
+    ("transcript_case", "allowed_outcome"),
+    [
+        ("The customer raised no objection.", "not_applicable"),
+        ("The customer objected and the agent resolved it clearly.", "pass"),
+        ("The customer objected and the agent dismissed the concern.", "fail"),
+        ("The objection exchange is missing from this partial transcript.", "insufficient_evidence"),
+    ],
+)
+def test_applicability_regression_preserves_all_four_contract_outcomes(
+    transcript_case: str,
+    allowed_outcome: str,
+) -> None:
+    del transcript_case
+    result = parse_scorecard_content(
+        json.dumps(
+            {
+                "criteria": [
+                    {"criterion_id": CRITERION_ONE, "outcome": allowed_outcome},
+                ]
+            }
+        ),
+        [CRITERION_ONE],
+    )
+    assert result.criteria[0].outcome == allowed_outcome
 
 
 def test_production_scoring_matches_phase8b_semantics() -> None:
