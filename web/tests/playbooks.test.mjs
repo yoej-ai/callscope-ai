@@ -1,29 +1,58 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { describe, it } from "node:test";
 
 import {
+  canEditPlaybookVersion,
   canManagePlaybooks,
+  criterionEditorTransition,
+  disclosureChevronDirection,
   normalizeCriterionDescription,
   normalizeCriterionGuidance,
   normalizeCriterionName,
   normalizePlaybookName,
   normalizePlaybookVertical,
+  nextDisclosureState,
   parseCriterionInput,
   parseCriterionWeight,
   parsePlaybookData,
   parsePlaybookStatus,
   parseWorkspaceRole,
+  pendingActionDisabled,
   PLAYBOOK_LIMITS,
+  publishedCriterionDisclosureState,
+  publishedPlaybookEditAction,
+  publishedVersionPresentation,
+  publishShellState,
   playbookVersionLabel,
   reorderCriteria,
   totalCriterionWeight,
   validateCriteriaForPublish,
+  versionHistoryDisclosureState,
 } from "../lib/playbooks.mjs";
 
 const WORKSPACE_ID = "10000000-0000-4000-8000-000000000081";
 const PLAYBOOK_ID = "20000000-0000-4000-8000-000000000081";
 const VERSION_ID = "30000000-0000-4000-8000-000000000081";
 const CRITERION_ID = "40000000-0000-4000-8000-000000000081";
+
+function actionSource(source, actionName, nextActionName) {
+  const start = source.indexOf(`export async function ${actionName}`);
+  assert.notEqual(start, -1, `${actionName} must exist`);
+  const end = nextActionName
+    ? source.indexOf(`export async function ${nextActionName}`, start)
+    : source.length;
+  assert.notEqual(end, -1, `${nextActionName} must exist`);
+  return source.slice(start, end);
+}
+
+function cssRule(source, selector) {
+  const start = source.indexOf(`${selector} {`);
+  assert.notEqual(start, -1, `${selector} must exist`);
+  const bodyStart = source.indexOf("{", start) + 1;
+  const end = source.indexOf("}", bodyStart);
+  return source.slice(bodyStart, end);
+}
 
 describe("playbook field normalization", () => {
   it("normalizes required single-line fields and vertical slugs", () => {
@@ -147,6 +176,251 @@ describe("criterion validation and ordering", () => {
   });
 });
 
+describe("playbook editor presentation state", () => {
+  it("keeps saved criteria collapsed until Edit is requested", () => {
+    assert.equal(criterionEditorTransition(null, "save-success", CRITERION_ID), null);
+    assert.equal(criterionEditorTransition(null, "edit", CRITERION_ID), CRITERION_ID);
+    assert.equal(
+      criterionEditorTransition(CRITERION_ID, "cancel", CRITERION_ID),
+      null,
+    );
+  });
+
+  it("keeps a failed save open and protects another unsaved editor", () => {
+    assert.equal(
+      criterionEditorTransition(null, "save-failure", CRITERION_ID),
+      CRITERION_ID,
+    );
+    assert.equal(
+      criterionEditorTransition(CRITERION_ID, "edit", "criterion-two"),
+      CRITERION_ID,
+    );
+  });
+
+  it("maps a visible chevron for both disclosure states", () => {
+    assert.equal(disclosureChevronDirection(false), "right");
+    assert.equal(disclosureChevronDirection(true), "down");
+  });
+
+  it("opens and closes Add Criterion and publish disclosures without collapsing pending UI", () => {
+    assert.equal(nextDisclosureState(false), true);
+    assert.equal(nextDisclosureState(true), false);
+    assert.equal(nextDisclosureState(true, true), true);
+  });
+
+  it("blocks duplicate actions while pending without changing base availability", () => {
+    assert.equal(pendingActionDisabled(false, false), false);
+    assert.equal(pendingActionDisabled(false, true), true);
+    assert.equal(pendingActionDisabled(true, false), true);
+  });
+
+  it("creates a draft for published editing and resumes an existing draft", () => {
+    assert.deepEqual(publishedPlaybookEditAction("owner", true, null), {
+      kind: "create",
+      label: "Edit playbook",
+    });
+    assert.deepEqual(publishedPlaybookEditAction("admin", true, 3), {
+      kind: "continue",
+      label: "Continue editing Version 3",
+    });
+    assert.equal(publishedPlaybookEditAction("member", true, null), null);
+    assert.equal(publishedPlaybookEditAction("owner", false, null), null);
+  });
+
+  it("keeps published criterion summaries visible while details disclose", () => {
+    assert.deepEqual(publishedCriterionDisclosureState(false), {
+      summaryVisible: true,
+      detailsVisible: false,
+      label: "View details",
+      chevron: "right",
+    });
+    assert.deepEqual(publishedCriterionDisclosureState(true), {
+      summaryVisible: true,
+      detailsVisible: true,
+      label: "Hide details",
+      chevron: "down",
+    });
+  });
+
+  it("keeps the closed publish shell mounted without confirmation actions", () => {
+    const state = publishShellState(false, false);
+    assert.equal(state.shellVisible, true);
+    assert.equal(state.contentVisible, false);
+    assert.equal(state.chevron, "right");
+    assert.equal(state.actions, null);
+  });
+
+  it("renders Keep editing and Confirm publish together for a valid confirmation", () => {
+    const state = publishShellState(true, false, false);
+    assert.equal(state.shellVisible, true);
+    assert.equal(state.contentVisible, true);
+    assert.equal(state.expanded, true);
+    assert.equal(state.chevron, "down");
+    assert.deepEqual(state.actions, {
+      keepEditing: {
+        visible: true,
+        disabled: false,
+        label: "Keep editing",
+      },
+      confirmPublish: {
+        visible: true,
+        disabled: false,
+        label: "Confirm publish",
+        busy: false,
+      },
+    });
+  });
+
+  it("keeps invalid confirmation understandable but blocks submit", () => {
+    const state = publishShellState(true, false, true);
+    assert.equal(state.actions?.keepEditing.visible, true);
+    assert.equal(state.actions?.keepEditing.disabled, false);
+    assert.equal(state.actions?.confirmPublish.visible, true);
+    assert.equal(state.actions?.confirmPublish.disabled, true);
+    assert.equal(state.actions?.confirmPublish.label, "Confirm publish");
+  });
+
+  it("keeps a stable pending submit action and blocks duplicate submission", () => {
+    const state = publishShellState(false, true, false);
+    assert.equal(state.shellVisible, true);
+    assert.equal(state.contentVisible, true);
+    assert.equal(state.toggleDisabled, true);
+    assert.equal(state.actions?.keepEditing.disabled, true);
+    assert.equal(state.actions?.confirmPublish.visible, true);
+    assert.equal(state.actions?.confirmPublish.disabled, true);
+    assert.equal(state.actions?.confirmPublish.label, "Publishing...");
+    assert.equal(state.actions?.confirmPublish.busy, true);
+  });
+
+  it("restores both usable actions after a recoverable publish error", () => {
+    const state = publishShellState(true, false, false);
+    assert.equal(state.shellVisible, true);
+    assert.equal(state.contentVisible, true);
+    assert.equal(state.actions?.keepEditing.disabled, false);
+    assert.equal(state.actions?.confirmPublish.disabled, false);
+    assert.equal(state.actions?.confirmPublish.label, "Confirm publish");
+  });
+
+  it("presents one logical playbook with the current published version first", () => {
+    const versions = [
+      { id: "version-1", status: "published", versionNumber: 1 },
+      { id: "draft-4", status: "draft", versionNumber: 4 },
+      { id: "version-3", status: "published", versionNumber: 3 },
+      { id: "version-2", status: "published", versionNumber: 2 },
+    ];
+    const presentation = publishedVersionPresentation(versions);
+
+    assert.equal(presentation.current?.id, "version-3");
+    assert.deepEqual(
+      presentation.previous.map((version) => version.id),
+      ["version-2", "version-1"],
+    );
+    assert.equal(
+      presentation.previous.some(
+        (version) => version.id === presentation.current?.id,
+      ),
+      false,
+    );
+  });
+
+  it("keeps previous version history closed by default and discloses accessibly", () => {
+    assert.deepEqual(versionHistoryDisclosureState(false, 2), {
+      open: false,
+      count: 2,
+      contentVisible: false,
+      label: "View version history",
+      chevron: "right",
+    });
+    assert.deepEqual(versionHistoryDisclosureState(true, 2), {
+      open: true,
+      count: 2,
+      contentVisible: true,
+      label: "Hide version history",
+      chevron: "down",
+    });
+    assert.equal(versionHistoryDisclosureState(true, 0).contentVisible, false);
+  });
+});
+
+describe("playbook version mutation boundaries", () => {
+  it("keeps details, criterion saves, and reordering on existing records", async () => {
+    const source = await readFile(
+      new URL("../app/dashboard/playbooks/actions.ts", import.meta.url),
+      "utf8",
+    );
+    const details = actionSource(
+      source,
+      "updatePlaybookDraft",
+      "addPlaybookCriterion",
+    );
+    const criterion = actionSource(
+      source,
+      "updatePlaybookCriterion",
+      "removePlaybookCriterion",
+    );
+    const reorder = actionSource(
+      source,
+      "movePlaybookCriterion",
+      "publishPlaybookVersion",
+    );
+
+    assert.match(details, /\.rpc\("update_playbook_draft"/u);
+    assert.match(details, /p_version_id:\s*versionId/u);
+    assert.match(criterion, /\.rpc\("update_playbook_criterion"/u);
+    assert.match(criterion, /p_criterion_id:\s*criterionId/u);
+    assert.match(reorder, /\.rpc\("move_playbook_criterion"/u);
+    assert.match(reorder, /p_criterion_id:\s*criterionId/u);
+    for (const saveAction of [details, criterion, reorder]) {
+      assert.doesNotMatch(saveAction, /create_next_playbook_version/u);
+    }
+  });
+
+  it("creates the next draft only when entering edit from published state", async () => {
+    const source = await readFile(
+      new URL("../app/dashboard/playbooks/actions.ts", import.meta.url),
+      "utf8",
+    );
+    const createNext = actionSource(source, "createNextPlaybookVersion");
+
+    assert.match(createNext, /\.rpc\("create_next_playbook_version"/u);
+    assert.equal(
+      source.match(/create_next_playbook_version/gu)?.length,
+      1,
+    );
+    assert.deepEqual(publishedPlaybookEditAction("admin", true, 4), {
+      kind: "continue",
+      label: "Continue editing Version 4",
+    });
+  });
+});
+
+describe("publish confirmation styling contract", () => {
+  it("keeps explicit contrast in every publish-confirm action state", async () => {
+    const source = await readFile(
+      new URL("../app/globals.css", import.meta.url),
+      "utf8",
+    );
+    const selectors = [
+      ".publish-confirmation-actions .publish-confirm-button.button.primary",
+      '.publish-confirmation-actions .publish-confirm-button.button.primary:hover:not(:disabled):not([aria-disabled="true"])',
+      ".publish-confirmation-actions .publish-confirm-button.button.primary:focus-visible:not(:disabled)",
+      '.publish-confirmation-actions .publish-confirm-button.button.primary:active:not(:disabled):not([aria-disabled="true"])',
+      ".publish-confirmation-actions .publish-confirm-button.button.primary:disabled",
+      '.publish-confirmation-actions .publish-confirm-button.button.primary[aria-busy="true"]',
+    ];
+
+    for (const selector of selectors) {
+      const rule = cssRule(source, selector);
+      assert.match(rule, /background:\s*[^;]+;/u);
+      assert.match(rule, /color:\s*[^;]+;/u);
+    }
+
+    const hoverRule = cssRule(source, selectors[1]);
+    assert.doesNotMatch(hoverRule, /background:\s*var\(--forest-dark\)/u);
+    assert.match(hoverRule, /color:\s*var\(--forest-dark\)/u);
+  });
+});
+
 describe("playbook state and response safety", () => {
   it("parses only supported lifecycle and workspace roles", () => {
     assert.equal(parsePlaybookStatus("draft"), "draft");
@@ -163,6 +437,14 @@ describe("playbook state and response safety", () => {
     assert.equal(canManagePlaybooks("admin"), true);
     assert.equal(canManagePlaybooks("member"), false);
     assert.equal(canManagePlaybooks("authenticated"), false);
+  });
+
+  it("keeps published versions read-only for every role", () => {
+    assert.equal(canEditPlaybookVersion("draft", "owner"), true);
+    assert.equal(canEditPlaybookVersion("draft", "admin"), true);
+    assert.equal(canEditPlaybookVersion("draft", "member"), false);
+    assert.equal(canEditPlaybookVersion("published", "owner"), false);
+    assert.equal(canEditPlaybookVersion("published", "admin"), false);
   });
 
   it("formats stable version labels", () => {
