@@ -13,14 +13,17 @@ import {
   PlaybookPendingButton,
   PublishPlaybookControl,
 } from "@/components/playbook-controls";
-import { PublishedCriteriaList } from "@/components/published-playbook-history";
+import {
+  PreviousVersionHistory,
+  PublishedCriteriaList,
+} from "@/components/published-playbook-history";
 import {
   canEditPlaybookVersion,
   canManagePlaybooks,
   isPlaybookUuid,
   PLAYBOOK_LIMITS,
   publishedPlaybookEditAction,
-  playbookVersionLabel,
+  publishedVersionPresentation,
   totalCriterionWeight,
   validateCriteriaForPublish,
   type PlaybookVersion,
@@ -88,15 +91,18 @@ function hiddenIdentityFields({
   );
 }
 
-function PublishedVersion({ version }: { version: PlaybookVersion }) {
+function CurrentPublishedDefinition({ version }: { version: PlaybookVersion }) {
   return (
-    <article className="published-version-card">
+    <section
+      aria-labelledby="current-playbook-definition-title"
+      className="current-version-section"
+    >
       <header>
         <div>
-          <span className="version-badge published">Published</span>
-          <h2>{version.name}</h2>
+          <p className="eyebrow">Current playbook definition</p>
+          <h2 id="current-playbook-definition-title">Scoring criteria</h2>
           <p>
-            {playbookVersionLabel(version.versionNumber, version.status)} · {" "}
+            Current version: Version {version.versionNumber} · {" "}
             {humanizeDisplayLabel(version.vertical)}
           </p>
         </div>
@@ -109,7 +115,7 @@ function PublishedVersion({ version }: { version: PlaybookVersion }) {
         Published {version.publishedAt ? formatDate(version.publishedAt) : ""}
       </p>
       <PublishedCriteriaList criteria={version.criteria} />
-    </article>
+    </section>
   );
 }
 
@@ -166,14 +172,20 @@ export default async function PlaybookDetailPage({
   const playbook = detail.playbook;
   const canManage = canManagePlaybooks(context.role);
   const draft = playbook.versions.find((version) => version.status === "draft");
-  const published = playbook.versions
-    .filter((version) => version.status === "published")
-    .sort((left, right) => right.versionNumber - left.versionNumber);
-  const latest = playbook.versions.at(-1);
-  if (!latest) notFound();
+  const {
+    current: currentPublished,
+    previous: previousPublished,
+  } = publishedVersionPresentation(playbook.versions);
+  const displayVersion = draft ?? currentPublished;
+  if (!displayVersion) notFound();
+  const historicalVersions = draft
+    ? currentPublished
+      ? [currentPublished, ...previousPublished]
+      : previousPublished
+    : previousPublished;
   const editAction = publishedPlaybookEditAction(
     context.role,
-    published.length > 0,
+    currentPublished !== null,
     draft?.versionNumber ?? null,
   );
 
@@ -211,14 +223,23 @@ export default async function PlaybookDetailPage({
         <header className="playbook-detail-header">
           <div>
             <div className="playbook-title-status">
-              <span className={`version-badge ${latest.status}`}>
-                {latest.status === "draft" ? "Draft" : "Published"}
+              <span className={`version-badge ${displayVersion.status}`}>
+                {draft ? "Draft" : "Published"}
               </span>
-              <span>{playbookVersionLabel(latest.versionNumber, latest.status)}</span>
+              <span>
+                {draft
+                  ? currentPublished
+                    ? `Draft based on Version ${currentPublished.versionNumber}`
+                    : "First draft"
+                  : `Current version: Version ${displayVersion.versionNumber}`}
+              </span>
             </div>
-            <h1>{latest.name}</h1>
+            <h1>{draft ? `Editing ${draft.name}` : displayVersion.name}</h1>
             <p className="lede">
-              {humanizeDisplayLabel(latest.vertical)} playbook · {context.activeWorkspace.name}
+              {humanizeDisplayLabel(displayVersion.vertical)} playbook · {context.activeWorkspace.name}
+              {draft && (
+                <> · Changes will become the next published version when you publish.</>
+              )}
             </p>
           </div>
           {editAction?.kind === "create" && (
@@ -240,7 +261,7 @@ export default async function PlaybookDetailPage({
           )}
         </header>
 
-        {published.length > 0 && (
+        {currentPublished && (
           <p className="playbook-version-note">
             Published versions stay unchanged so previous call scores remain
             accurate. Editing creates a new draft version.
@@ -266,9 +287,10 @@ export default async function PlaybookDetailPage({
             <div className="section-heading">
               <div>
                 <p className="eyebrow">Editable draft</p>
-                <h2 id="draft-editor-title">
-                  Configure Version {draft.versionNumber}
-                </h2>
+                <h2 id="draft-editor-title">Edit playbook details</h2>
+                <p className="draft-version-label">
+                  Working draft · Version {draft.versionNumber}
+                </p>
               </div>
               <span className="version-badge draft">Private draft</span>
             </div>
@@ -336,25 +358,13 @@ export default async function PlaybookDetailPage({
           </section>
         )}
 
-        {published.length > 0 ? (
-          <section className="published-history" aria-labelledby="published-history-title">
-            <div className="section-heading">
-              <div>
-                <p className="eyebrow">Version history</p>
-                <h2 id="published-history-title">Published versions</h2>
-              </div>
-              <p>
-                Read-only versions preserve the exact criteria used by earlier
-                evaluations.
-              </p>
-            </div>
-            <div className="published-version-list">
-              {published.map((version) => (
-                <PublishedVersion key={version.id} version={version} />
-              ))}
-            </div>
-          </section>
-        ) : !draft || !canManage ? (
+        {!draft && currentPublished && (
+          <CurrentPublishedDefinition version={currentPublished} />
+        )}
+
+        <PreviousVersionHistory versions={historicalVersions} />
+
+        {!currentPublished && (!draft || !canManage) ? (
           <section className="playbook-empty">
             <h2>No published version is available.</h2>
             <p>An owner or admin must finish and publish the first draft.</p>

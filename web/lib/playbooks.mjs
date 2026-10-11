@@ -275,6 +275,42 @@ export function publishedPlaybookEditAction(
   return { kind: "create", label: "Edit playbook" };
 }
 
+/**
+ * Present one logical playbook with its newest published definition first and
+ * immutable older definitions kept as secondary history.
+ * @template {{status: unknown, versionNumber: number}} T
+ * @param {T[]} versions
+ */
+export function publishedVersionPresentation(versions) {
+  const ordered = Array.isArray(versions)
+    ? versions
+        .filter(
+          (version) =>
+            version?.status === "published" &&
+            Number.isSafeInteger(version?.versionNumber),
+        )
+        .slice()
+        .sort((left, right) => right.versionNumber - left.versionNumber)
+    : [];
+  return {
+    current: ordered[0] ?? null,
+    previous: ordered.slice(1),
+  };
+}
+
+/** @param {boolean} open @param {number} count */
+export function versionHistoryDisclosureState(open, count) {
+  const safeCount = Number.isSafeInteger(count) && count > 0 ? count : 0;
+  const expanded = Boolean(open && safeCount > 0);
+  return {
+    open: expanded,
+    count: safeCount,
+    contentVisible: expanded,
+    label: expanded ? "Hide version history" : "View version history",
+    chevron: disclosureChevronDirection(expanded),
+  };
+}
+
 /** @param {boolean} open */
 export function publishedCriterionDisclosureState(open) {
   const detailsVisible = Boolean(open);

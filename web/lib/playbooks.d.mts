@@ -82,6 +82,22 @@ export function publishedPlaybookEditAction(
   | { kind: "continue"; label: string }
   | { kind: "create"; label: "Edit playbook" }
   | null;
+export function publishedVersionPresentation<
+  T extends { status: unknown; versionNumber: number },
+>(versions: T[]): {
+  current: T | null;
+  previous: T[];
+};
+export function versionHistoryDisclosureState(
+  open: boolean,
+  count: number,
+): {
+  open: boolean;
+  count: number;
+  contentVisible: boolean;
+  label: "Hide version history" | "View version history";
+  chevron: "right" | "down";
+};
 export function publishedCriterionDisclosureState(open: boolean): {
   summaryVisible: true;
   detailsVisible: boolean;
