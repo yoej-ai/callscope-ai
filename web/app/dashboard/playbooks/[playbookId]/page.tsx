@@ -2,28 +2,27 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import {
-  addPlaybookCriterion,
   createNextPlaybookVersion,
-  movePlaybookCriterion,
   publishPlaybookVersion,
-  removePlaybookCriterion,
-  updatePlaybookCriterion,
   updatePlaybookDraft,
 } from "@/app/dashboard/playbooks/actions";
 import { DashboardNav } from "@/components/dashboard-nav";
 import {
+  DraftCriteriaEditor,
   LivePlaybookWeights,
   PlaybookPendingButton,
   PublishPlaybookControl,
 } from "@/components/playbook-controls";
+import { PublishedCriteriaList } from "@/components/published-playbook-history";
 import {
+  canEditPlaybookVersion,
   canManagePlaybooks,
   isPlaybookUuid,
   PLAYBOOK_LIMITS,
+  publishedPlaybookEditAction,
   playbookVersionLabel,
   totalCriterionWeight,
   validateCriteriaForPublish,
-  type PlaybookCriterion,
   type PlaybookVersion,
 } from "@/lib/playbooks.mjs";
 import {
@@ -89,160 +88,6 @@ function hiddenIdentityFields({
   );
 }
 
-function CriterionFields({
-  criterion,
-  idPrefix,
-  liveWeight = false,
-}: {
-  criterion?: PlaybookCriterion;
-  idPrefix: string;
-  liveWeight?: boolean;
-}) {
-  return (
-    <div className="criterion-fields">
-      <div className="criterion-primary-fields">
-        <div>
-          <label htmlFor={`${idPrefix}-name`}>Criterion name</label>
-          <input
-            defaultValue={criterion?.name}
-            id={`${idPrefix}-name`}
-            maxLength={PLAYBOOK_LIMITS.criterionName}
-            name="name"
-            placeholder="Discovery"
-            required
-          />
-        </div>
-        <div>
-          <label htmlFor={`${idPrefix}-weight`}>Weight</label>
-          <div className="weight-input">
-            <input
-              data-playbook-weight={liveWeight ? "true" : undefined}
-              defaultValue={criterion?.weight ?? 10}
-              id={`${idPrefix}-weight`}
-              inputMode="numeric"
-              max={100}
-              min={1}
-              name="weight"
-              required
-              type="number"
-            />
-            <span aria-hidden="true">%</span>
-          </div>
-        </div>
-      </div>
-      <div>
-        <label htmlFor={`${idPrefix}-description`}>Description</label>
-        <textarea
-          defaultValue={criterion?.description}
-          id={`${idPrefix}-description`}
-          maxLength={PLAYBOOK_LIMITS.description}
-          name="description"
-          placeholder="What this criterion measures and why it matters."
-          rows={3}
-        />
-      </div>
-      <div className="guidance-grid">
-        <div>
-          <label htmlFor={`${idPrefix}-pass`}>Pass evidence and guidance</label>
-          <textarea
-            defaultValue={criterion?.passGuidance}
-            id={`${idPrefix}-pass`}
-            maxLength={PLAYBOOK_LIMITS.guidance}
-            name="passGuidance"
-            placeholder="What strong evidence sounds like."
-            rows={4}
-          />
-        </div>
-        <div>
-          <label htmlFor={`${idPrefix}-fail`}>Fail evidence and guidance</label>
-          <textarea
-            defaultValue={criterion?.failGuidance}
-            id={`${idPrefix}-fail`}
-            maxLength={PLAYBOOK_LIMITS.guidance}
-            name="failGuidance"
-            placeholder="What missing or weak evidence looks like."
-            rows={4}
-          />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function DraftCriterion({
-  criterion,
-  index,
-  count,
-  workspaceId,
-  playbookId,
-}: {
-  criterion: PlaybookCriterion;
-  index: number;
-  count: number;
-  workspaceId: string;
-  playbookId: string;
-}) {
-  const identity = { workspaceId, playbookId, criterionId: criterion.id };
-  return (
-    <article className="criterion-editor-card">
-      <header>
-        <div>
-          <span className="criterion-position">{criterion.position}</span>
-          <div>
-            <p className="eyebrow">Scoring criterion</p>
-            <h3>{criterion.name}</h3>
-          </div>
-        </div>
-        <div className="criterion-order-controls" aria-label={`Reorder ${criterion.name}`}>
-          <form action={movePlaybookCriterion}>
-            {hiddenIdentityFields(identity)}
-            <input name="direction" type="hidden" value="up" />
-            <PlaybookPendingButton
-              className="button ghost small"
-              disabled={index === 0}
-              idleLabel="Move up"
-              pendingLabel="Moving…"
-            />
-          </form>
-          <form action={movePlaybookCriterion}>
-            {hiddenIdentityFields(identity)}
-            <input name="direction" type="hidden" value="down" />
-            <PlaybookPendingButton
-              className="button ghost small"
-              disabled={index === count - 1}
-              idleLabel="Move down"
-              pendingLabel="Moving…"
-            />
-          </form>
-        </div>
-      </header>
-      <form action={updatePlaybookCriterion} className="criterion-form">
-        {hiddenIdentityFields(identity)}
-        <CriterionFields
-          criterion={criterion}
-          idPrefix={`criterion-${criterion.id}`}
-          liveWeight
-        />
-        <div className="criterion-form-actions">
-          <PlaybookPendingButton
-            className="button secondary small"
-            idleLabel="Save criterion"
-            pendingLabel="Saving…"
-          />
-        </div>
-      </form>
-      <form action={removePlaybookCriterion} className="criterion-remove-form">
-        {hiddenIdentityFields(identity)}
-        <PlaybookPendingButton
-          className="button ghost small"
-          idleLabel="Remove criterion"
-          pendingLabel="Removing…"
-        />
-      </form>
-    </article>
-  );
-}
-
 function PublishedVersion({ version }: { version: PlaybookVersion }) {
   return (
     <article className="published-version-card">
@@ -257,33 +102,13 @@ function PublishedVersion({ version }: { version: PlaybookVersion }) {
         </div>
         <div className="published-lock">
           <span aria-hidden="true">✓</span>
-          Immutable
+          Read-only
         </div>
       </header>
       <p className="published-date">
         Published {version.publishedAt ? formatDate(version.publishedAt) : ""}
       </p>
-      <ol className="published-criteria-list">
-        {version.criteria.map((criterion) => (
-          <li key={criterion.id}>
-            <div className="published-criterion-heading">
-              <strong>{criterion.name}</strong>
-              <span>{criterion.weight}%</span>
-            </div>
-            {criterion.description && <p>{criterion.description}</p>}
-            <div className="published-guidance-grid">
-              <div>
-                <span>Pass guidance</span>
-                <p>{criterion.passGuidance || "No guidance provided."}</p>
-              </div>
-              <div>
-                <span>Fail guidance</span>
-                <p>{criterion.failGuidance || "No guidance provided."}</p>
-              </div>
-            </div>
-          </li>
-        ))}
-      </ol>
+      <PublishedCriteriaList criteria={version.criteria} />
     </article>
   );
 }
@@ -346,6 +171,11 @@ export default async function PlaybookDetailPage({
     .sort((left, right) => right.versionNumber - left.versionNumber);
   const latest = playbook.versions.at(-1);
   if (!latest) notFound();
+  const editAction = publishedPlaybookEditAction(
+    context.role,
+    published.length > 0,
+    draft?.versionNumber ?? null,
+  );
 
   const publishValidation = draft
     ? validateCriteriaForPublish(draft.criteria)
@@ -391,22 +221,35 @@ export default async function PlaybookDetailPage({
               {humanizeDisplayLabel(latest.vertical)} playbook · {context.activeWorkspace.name}
             </p>
           </div>
-          {canManage && !draft && published.length > 0 && (
+          {editAction?.kind === "create" && (
             <form action={createNextPlaybookVersion}>
               {hiddenIdentityFields({
                 workspaceId: context.activeWorkspace.id,
                 playbookId,
               })}
               <PlaybookPendingButton
-                idleLabel="Create new version"
-                pendingLabel="Creating version…"
+                idleLabel={editAction.label}
+                pendingLabel="Creating draft…"
               />
             </form>
           )}
+          {editAction?.kind === "continue" && (
+            <Link className="button primary" href="#draft-editor-title">
+              {editAction.label}
+            </Link>
+          )}
         </header>
+
+        {published.length > 0 && (
+          <p className="playbook-version-note">
+            Published versions stay unchanged so previous call scores remain
+            accurate. Editing creates a new draft version.
+          </p>
+        )}
 
         {(notice || actionError) && (
           <p
+            id="playbook-action-message"
             className={`playbook-message ${actionError ? "error" : "success"}`}
             role={actionError ? "alert" : "status"}
           >
@@ -414,8 +257,12 @@ export default async function PlaybookDetailPage({
           </p>
         )}
 
-        {draft && canManage && (
-          <section className="draft-editor" aria-labelledby="draft-editor-title">
+        {draft && canEditPlaybookVersion(draft.status, context.role) && (
+          <section
+            aria-describedby={actionError ? "playbook-action-message" : undefined}
+            aria-labelledby="draft-editor-title"
+            className="draft-editor"
+          >
             <div className="section-heading">
               <div>
                 <p className="eyebrow">Editable draft</p>
@@ -467,43 +314,15 @@ export default async function PlaybookDetailPage({
                   <p className="eyebrow">Ordered scoring criteria</p>
                   <h2>{draft.criteria.length} of {PLAYBOOK_LIMITS.criteria} criteria</h2>
                 </div>
-                <p>Use Move Up and Move Down to set evaluation order.</p>
+                <p>Saved criteria stay compact. Open Edit when you need to make a change.</p>
               </div>
 
-              <div className="criterion-editor-list">
-                {draft.criteria.map((criterion, index) => (
-                  <DraftCriterion
-                    count={draft.criteria.length}
-                    criterion={criterion}
-                    index={index}
-                    key={criterion.id}
-                    playbookId={playbookId}
-                    workspaceId={context.activeWorkspace.id}
-                  />
-                ))}
-              </div>
-
-              {draft.criteria.length < PLAYBOOK_LIMITS.criteria ? (
-                <details className="add-criterion-panel">
-                  <summary>Add criterion</summary>
-                  <form action={addPlaybookCriterion} className="criterion-form">
-                    {hiddenIdentityFields({
-                      workspaceId: context.activeWorkspace.id,
-                      playbookId,
-                      versionId: draft.id,
-                    })}
-                    <CriterionFields idPrefix="new-criterion" />
-                    <PlaybookPendingButton
-                      idleLabel="Add criterion"
-                      pendingLabel="Adding…"
-                    />
-                  </form>
-                </details>
-              ) : (
-                <p className="criterion-limit-note" role="status">
-                  This draft has reached the 20-criterion limit.
-                </p>
-              )}
+              <DraftCriteriaEditor
+                criteria={draft.criteria}
+                playbookId={playbookId}
+                versionId={draft.id}
+                workspaceId={context.activeWorkspace.id}
+              />
             </LivePlaybookWeights>
 
             <PublishPlaybookControl
@@ -521,10 +340,13 @@ export default async function PlaybookDetailPage({
           <section className="published-history" aria-labelledby="published-history-title">
             <div className="section-heading">
               <div>
-                <p className="eyebrow">Permanent history</p>
+                <p className="eyebrow">Version history</p>
                 <h2 id="published-history-title">Published versions</h2>
               </div>
-              <p>Each version remains stable for future score attribution.</p>
+              <p>
+                Read-only versions preserve the exact criteria used by earlier
+                evaluations.
+              </p>
             </div>
             <div className="published-version-list">
               {published.map((version) => (

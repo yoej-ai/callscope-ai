@@ -1,5 +1,6 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 import {
@@ -47,7 +48,10 @@ function playbookListPath(
 function playbookDetailPath(
   workspaceId: string,
   playbookId: string,
-  state?: { notice?: Notice; error?: ActionError },
+  state?: {
+    notice?: Notice;
+    error?: ActionError;
+  },
 ) {
   const parameters = new URLSearchParams({ workspace: workspaceId });
   if (state?.notice) parameters.set("notice", state.notice);
@@ -158,10 +162,16 @@ export async function addPlaybookCriterion(formData: FormData) {
     !isPlaybookUuid(playbookId) ||
     !isPlaybookUuid(versionId)
   ) {
-    redirect("/dashboard/playbooks?error=invalid");
+    return {
+      ok: false,
+      message: "Check the criterion fields and try again.",
+    } as const;
   }
   if (!input) {
-    redirect(playbookDetailPath(workspaceId, playbookId, { error: "invalid" }));
+    return {
+      ok: false,
+      message: "Check the criterion fields and try again.",
+    } as const;
   }
 
   const supabase = await authenticatedClient();
@@ -179,11 +189,14 @@ export async function addPlaybookCriterion(formData: FormData) {
     console.error("Playbook criterion creation failed", {
       code: error?.code ?? "invalid-response",
     });
-    redirect(playbookDetailPath(workspaceId, playbookId, { error: "save-failed" }));
+    return {
+      ok: false,
+      message: "The criterion could not be added. Review the fields and try again.",
+    } as const;
   }
-  redirect(
-    playbookDetailPath(workspaceId, playbookId, { notice: "criterion-added" }),
-  );
+  revalidatePath(`/dashboard/playbooks/${encodeURIComponent(playbookId)}`);
+  revalidatePath("/dashboard/playbooks");
+  return { ok: true, message: "Criterion added and saved." } as const;
 }
 
 export async function updatePlaybookCriterion(formData: FormData) {
@@ -196,10 +209,16 @@ export async function updatePlaybookCriterion(formData: FormData) {
     !isPlaybookUuid(playbookId) ||
     !isPlaybookUuid(criterionId)
   ) {
-    redirect("/dashboard/playbooks?error=invalid");
+    return {
+      ok: false,
+      message: "Check the criterion fields and try again.",
+    } as const;
   }
   if (!input) {
-    redirect(playbookDetailPath(workspaceId, playbookId, { error: "invalid" }));
+    return {
+      ok: false,
+      message: "Check the criterion fields and try again.",
+    } as const;
   }
 
   const supabase = await authenticatedClient();
@@ -217,13 +236,14 @@ export async function updatePlaybookCriterion(formData: FormData) {
     console.error("Playbook criterion update failed", {
       code: error?.code ?? "invalid-response",
     });
-    redirect(playbookDetailPath(workspaceId, playbookId, { error: "save-failed" }));
+    return {
+      ok: false,
+      message: "The criterion could not be saved. Review the fields and try again.",
+    } as const;
   }
-  redirect(
-    playbookDetailPath(workspaceId, playbookId, {
-      notice: "criterion-updated",
-    }),
-  );
+  revalidatePath(`/dashboard/playbooks/${encodeURIComponent(playbookId)}`);
+  revalidatePath("/dashboard/playbooks");
+  return { ok: true, message: "Criterion changes saved." } as const;
 }
 
 export async function removePlaybookCriterion(formData: FormData) {
@@ -296,7 +316,10 @@ export async function publishPlaybookVersion(formData: FormData) {
     !isPlaybookUuid(playbookId) ||
     !isPlaybookUuid(versionId)
   ) {
-    redirect("/dashboard/playbooks?error=invalid");
+    return {
+      ok: false,
+      message: "The publish request was invalid. Refresh and try again.",
+    } as const;
   }
 
   const supabase = await authenticatedClient();
@@ -308,11 +331,15 @@ export async function publishPlaybookVersion(formData: FormData) {
     console.error("Playbook publication failed", {
       code: error?.code ?? "invalid-response",
     });
-    redirect(
-      playbookDetailPath(workspaceId, playbookId, { error: "publish-failed" }),
-    );
+    return {
+      ok: false,
+      message:
+        "Publishing was blocked. Check the saved criteria and try again.",
+    } as const;
   }
-  redirect(playbookDetailPath(workspaceId, playbookId, { notice: "published" }));
+  revalidatePath(`/dashboard/playbooks/${encodeURIComponent(playbookId)}`);
+  revalidatePath("/dashboard/playbooks");
+  return { ok: true, message: "Version published." } as const;
 }
 
 export async function createNextPlaybookVersion(formData: FormData) {
@@ -343,6 +370,8 @@ export async function createNextPlaybookVersion(formData: FormData) {
     redirect(playbookDetailPath(workspaceId, playbookId, { error: "save-failed" }));
   }
   redirect(
-    playbookDetailPath(workspaceId, playbookId, { notice: "version-created" }),
+    `${playbookDetailPath(workspaceId, playbookId, {
+      notice: "version-created",
+    })}#draft-editor-title`,
   );
 }

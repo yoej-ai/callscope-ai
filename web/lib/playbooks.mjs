@@ -208,6 +208,117 @@ export function reorderCriteria(criteria, criterionId, direction) {
   }));
 }
 
+/**
+ * Keep one criterion editor open at a time so switching cards never discards
+ * unsaved input. A successful server action closes the active editor, while
+ * a failed action keeps that same editor open.
+ * @param {string | null} activeCriterionId
+ * @param {"edit" | "cancel" | "save-success" | "save-failure"} intent
+ * @param {string} criterionId
+ */
+export function criterionEditorTransition(
+  activeCriterionId,
+  intent,
+  criterionId,
+) {
+  if (intent === "save-success") return null;
+  if (intent === "save-failure") return criterionId;
+  if (intent === "cancel") {
+    return activeCriterionId === criterionId ? null : activeCriterionId;
+  }
+  if (intent === "edit") {
+    return activeCriterionId === null || activeCriterionId === criterionId
+      ? criterionId
+      : activeCriterionId;
+  }
+  return activeCriterionId;
+}
+
+/** @param {boolean} open */
+export function disclosureChevronDirection(open) {
+  return open ? "down" : "right";
+}
+
+/** @param {boolean} open @param {boolean} pending */
+export function nextDisclosureState(open, pending = false) {
+  return pending ? open : !open;
+}
+
+/** @param {boolean} disabled @param {boolean} pending */
+export function pendingActionDisabled(disabled, pending) {
+  return Boolean(disabled || pending);
+}
+
+/**
+ * Choose the only valid management action for a published playbook. Existing
+ * drafts are resumed instead of creating another version.
+ * @param {unknown} role
+ * @param {boolean} hasPublishedVersion
+ * @param {number | null} draftVersionNumber
+ */
+export function publishedPlaybookEditAction(
+  role,
+  hasPublishedVersion,
+  draftVersionNumber,
+) {
+  if (!canManagePlaybooks(role) || !hasPublishedVersion) return null;
+  if (
+    Number.isSafeInteger(draftVersionNumber) &&
+    draftVersionNumber >= 1 &&
+    draftVersionNumber <= 10000
+  ) {
+    return {
+      kind: "continue",
+      label: `Continue editing Version ${draftVersionNumber}`,
+    };
+  }
+  return { kind: "create", label: "Edit playbook" };
+}
+
+/** @param {boolean} open */
+export function publishedCriterionDisclosureState(open) {
+  const detailsVisible = Boolean(open);
+  return {
+    summaryVisible: true,
+    detailsVisible,
+    label: detailsVisible ? "Hide details" : "View details",
+    chevron: disclosureChevronDirection(detailsVisible),
+  };
+}
+
+/**
+ * Keep the complete confirmation action set deterministic so the submit
+ * control cannot disappear independently of the persistent shell.
+ * @param {boolean} confirming
+ * @param {boolean} pending
+ * @param {boolean} disabled
+ */
+export function publishShellState(confirming, pending, disabled = false) {
+  const contentVisible = Boolean(confirming || pending);
+  return {
+    shellVisible: true,
+    contentVisible,
+    expanded: contentVisible,
+    toggleDisabled: Boolean(pending),
+    chevron: disclosureChevronDirection(contentVisible),
+    actions: contentVisible
+      ? {
+          keepEditing: {
+            visible: true,
+            disabled: Boolean(pending),
+            label: "Keep editing",
+          },
+          confirmPublish: {
+            visible: true,
+            disabled: pendingActionDisabled(disabled, pending),
+            label: pending ? "Publishing..." : "Confirm publish",
+            busy: Boolean(pending),
+          },
+        }
+      : null,
+  };
+}
+
 /** @param {unknown} value */
 export function parsePlaybookStatus(value) {
   return typeof value === "string" && PLAYBOOK_STATUSES.has(value)
@@ -225,6 +336,11 @@ export function parseWorkspaceRole(value) {
 /** @param {unknown} role */
 export function canManagePlaybooks(role) {
   return role === "owner" || role === "admin";
+}
+
+/** @param {unknown} status @param {unknown} role */
+export function canEditPlaybookVersion(status, role) {
+  return status === "draft" && canManagePlaybooks(role);
 }
 
 /** @param {number} versionNumber @param {unknown} status */

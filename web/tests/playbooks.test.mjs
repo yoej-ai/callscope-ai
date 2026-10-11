@@ -2,18 +2,26 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  canEditPlaybookVersion,
   canManagePlaybooks,
+  criterionEditorTransition,
+  disclosureChevronDirection,
   normalizeCriterionDescription,
   normalizeCriterionGuidance,
   normalizeCriterionName,
   normalizePlaybookName,
   normalizePlaybookVertical,
+  nextDisclosureState,
   parseCriterionInput,
   parseCriterionWeight,
   parsePlaybookData,
   parsePlaybookStatus,
   parseWorkspaceRole,
+  pendingActionDisabled,
   PLAYBOOK_LIMITS,
+  publishedCriterionDisclosureState,
+  publishedPlaybookEditAction,
+  publishShellState,
   playbookVersionLabel,
   reorderCriteria,
   totalCriterionWeight,
@@ -147,6 +155,132 @@ describe("criterion validation and ordering", () => {
   });
 });
 
+describe("playbook editor presentation state", () => {
+  it("keeps saved criteria collapsed until Edit is requested", () => {
+    assert.equal(criterionEditorTransition(null, "save-success", CRITERION_ID), null);
+    assert.equal(criterionEditorTransition(null, "edit", CRITERION_ID), CRITERION_ID);
+    assert.equal(
+      criterionEditorTransition(CRITERION_ID, "cancel", CRITERION_ID),
+      null,
+    );
+  });
+
+  it("keeps a failed save open and protects another unsaved editor", () => {
+    assert.equal(
+      criterionEditorTransition(null, "save-failure", CRITERION_ID),
+      CRITERION_ID,
+    );
+    assert.equal(
+      criterionEditorTransition(CRITERION_ID, "edit", "criterion-two"),
+      CRITERION_ID,
+    );
+  });
+
+  it("maps a visible chevron for both disclosure states", () => {
+    assert.equal(disclosureChevronDirection(false), "right");
+    assert.equal(disclosureChevronDirection(true), "down");
+  });
+
+  it("opens and closes Add Criterion and publish disclosures without collapsing pending UI", () => {
+    assert.equal(nextDisclosureState(false), true);
+    assert.equal(nextDisclosureState(true), false);
+    assert.equal(nextDisclosureState(true, true), true);
+  });
+
+  it("blocks duplicate actions while pending without changing base availability", () => {
+    assert.equal(pendingActionDisabled(false, false), false);
+    assert.equal(pendingActionDisabled(false, true), true);
+    assert.equal(pendingActionDisabled(true, false), true);
+  });
+
+  it("creates a draft for published editing and resumes an existing draft", () => {
+    assert.deepEqual(publishedPlaybookEditAction("owner", true, null), {
+      kind: "create",
+      label: "Edit playbook",
+    });
+    assert.deepEqual(publishedPlaybookEditAction("admin", true, 3), {
+      kind: "continue",
+      label: "Continue editing Version 3",
+    });
+    assert.equal(publishedPlaybookEditAction("member", true, null), null);
+    assert.equal(publishedPlaybookEditAction("owner", false, null), null);
+  });
+
+  it("keeps published criterion summaries visible while details disclose", () => {
+    assert.deepEqual(publishedCriterionDisclosureState(false), {
+      summaryVisible: true,
+      detailsVisible: false,
+      label: "View details",
+      chevron: "right",
+    });
+    assert.deepEqual(publishedCriterionDisclosureState(true), {
+      summaryVisible: true,
+      detailsVisible: true,
+      label: "Hide details",
+      chevron: "down",
+    });
+  });
+
+  it("keeps the closed publish shell mounted without confirmation actions", () => {
+    const state = publishShellState(false, false);
+    assert.equal(state.shellVisible, true);
+    assert.equal(state.contentVisible, false);
+    assert.equal(state.chevron, "right");
+    assert.equal(state.actions, null);
+  });
+
+  it("renders Keep editing and Confirm publish together for a valid confirmation", () => {
+    const state = publishShellState(true, false, false);
+    assert.equal(state.shellVisible, true);
+    assert.equal(state.contentVisible, true);
+    assert.equal(state.expanded, true);
+    assert.equal(state.chevron, "down");
+    assert.deepEqual(state.actions, {
+      keepEditing: {
+        visible: true,
+        disabled: false,
+        label: "Keep editing",
+      },
+      confirmPublish: {
+        visible: true,
+        disabled: false,
+        label: "Confirm publish",
+        busy: false,
+      },
+    });
+  });
+
+  it("keeps invalid confirmation understandable but blocks submit", () => {
+    const state = publishShellState(true, false, true);
+    assert.equal(state.actions?.keepEditing.visible, true);
+    assert.equal(state.actions?.keepEditing.disabled, false);
+    assert.equal(state.actions?.confirmPublish.visible, true);
+    assert.equal(state.actions?.confirmPublish.disabled, true);
+    assert.equal(state.actions?.confirmPublish.label, "Confirm publish");
+  });
+
+  it("keeps a stable pending submit action and blocks duplicate submission", () => {
+    const state = publishShellState(false, true, false);
+    assert.equal(state.shellVisible, true);
+    assert.equal(state.contentVisible, true);
+    assert.equal(state.toggleDisabled, true);
+    assert.equal(state.actions?.keepEditing.disabled, true);
+    assert.equal(state.actions?.confirmPublish.visible, true);
+    assert.equal(state.actions?.confirmPublish.disabled, true);
+    assert.equal(state.actions?.confirmPublish.label, "Publishing...");
+    assert.equal(state.actions?.confirmPublish.busy, true);
+  });
+
+  it("restores both usable actions after a recoverable publish error", () => {
+    const state = publishShellState(true, false, false);
+    assert.equal(state.shellVisible, true);
+    assert.equal(state.contentVisible, true);
+    assert.equal(state.actions?.keepEditing.disabled, false);
+    assert.equal(state.actions?.confirmPublish.disabled, false);
+    assert.equal(state.actions?.confirmPublish.label, "Confirm publish");
+  });
+});
+
 describe("playbook state and response safety", () => {
   it("parses only supported lifecycle and workspace roles", () => {
     assert.equal(parsePlaybookStatus("draft"), "draft");
@@ -163,6 +297,14 @@ describe("playbook state and response safety", () => {
     assert.equal(canManagePlaybooks("admin"), true);
     assert.equal(canManagePlaybooks("member"), false);
     assert.equal(canManagePlaybooks("authenticated"), false);
+  });
+
+  it("keeps published versions read-only for every role", () => {
+    assert.equal(canEditPlaybookVersion("draft", "owner"), true);
+    assert.equal(canEditPlaybookVersion("draft", "admin"), true);
+    assert.equal(canEditPlaybookVersion("draft", "member"), false);
+    assert.equal(canEditPlaybookVersion("published", "owner"), false);
+    assert.equal(canEditPlaybookVersion("published", "admin"), false);
   });
 
   it("formats stable version labels", () => {

@@ -63,9 +63,59 @@ export function reorderCriteria<T extends { id: string; position: number }>(
   criterionId: string,
   direction: "up" | "down",
 ): T[];
+export function criterionEditorTransition(
+  activeCriterionId: string | null,
+  intent: "edit" | "cancel" | "save-success" | "save-failure",
+  criterionId: string,
+): string | null;
+export function disclosureChevronDirection(open: boolean): "right" | "down";
+export function nextDisclosureState(open: boolean, pending?: boolean): boolean;
+export function pendingActionDisabled(
+  disabled: boolean,
+  pending: boolean,
+): boolean;
+export function publishedPlaybookEditAction(
+  role: unknown,
+  hasPublishedVersion: boolean,
+  draftVersionNumber: number | null,
+):
+  | { kind: "continue"; label: string }
+  | { kind: "create"; label: "Edit playbook" }
+  | null;
+export function publishedCriterionDisclosureState(open: boolean): {
+  summaryVisible: true;
+  detailsVisible: boolean;
+  label: "Hide details" | "View details";
+  chevron: "right" | "down";
+};
+export function publishShellState(
+  confirming: boolean,
+  pending: boolean,
+  disabled?: boolean,
+): {
+  shellVisible: true;
+  contentVisible: boolean;
+  expanded: boolean;
+  toggleDisabled: boolean;
+  chevron: "right" | "down";
+  actions: {
+    keepEditing: {
+      visible: true;
+      disabled: boolean;
+      label: "Keep editing";
+    };
+    confirmPublish: {
+      visible: true;
+      disabled: boolean;
+      label: "Confirm publish" | "Publishing...";
+      busy: boolean;
+    };
+  } | null;
+};
 export function parsePlaybookStatus(value: unknown): PlaybookStatus | null;
 export function parseWorkspaceRole(value: unknown): WorkspaceRole | null;
 export function canManagePlaybooks(role: unknown): boolean;
+export function canEditPlaybookVersion(status: unknown, role: unknown): boolean;
 export function playbookVersionLabel(
   versionNumber: number,
   status: unknown,
