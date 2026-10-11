@@ -1,15 +1,17 @@
 # CallScope AI — local worker orchestration
 
 This trusted local worker is not a frontend feature or public FastAPI endpoint.
-The `callscope-worker` supervisor runs the transcription and AI-analysis
-pipelines together while keeping their resources and failure handling isolated.
+The `callscope-worker` supervisor runs the transcription, generic AI-analysis,
+and custom scorecard pipelines together while keeping their resources and
+failure handling isolated.
 It reuses the existing one-job processing functions and service-role-only RPCs;
 it does not bypass claim tokens, leases, heartbeats, retry state, or RLS.
 
 ## Prerequisites
 
 - Python 3.12 or newer; FFmpeg/ffprobe installed and on PATH
-- Supabase database with the transcription and analysis migrations applied
+- Supabase database with the transcription, analysis, Playbook, and scorecard
+  migrations applied
 - CPU and disk space for the free Whisper model
 - Local Ollama listening only on loopback, with `qwen3:4b-instruct` available
 - Worker-only `SUPABASE_SECRET_KEY` in the private worker environment, or a
@@ -30,13 +32,13 @@ it does not bypass claim tokens, leases, heartbeats, retry state, or RLS.
    values. `OLLAMA_BASE_URL` defaults to the loopback-only
    `http://127.0.0.1:11434`, and `OLLAMA_MODEL` defaults to
    `qwen3:4b-instruct`.
-6. Start both continuous pipelines on the trusted local machine:
+6. Start all three continuous pipelines on the trusted local machine:
 
    ```text
    callscope-worker
    ```
 
-7. Press Ctrl+C to stop both pipelines cleanly.
+7. Press Ctrl+C to stop all three pipelines cleanly.
 
 The supervisor polls empty queues every 30 seconds by default. Infrastructure
 failures retry independently with exponential backoff from 5 seconds up to a
@@ -44,12 +46,42 @@ failures retry independently with exponential backoff from 5 seconds up to a
 `--initial-backoff-seconds`, and `--max-backoff-seconds`; use
 `callscope-worker --help` for the bounded option ranges.
 
-Ollama or model preflight failure occurs before an analysis claim, so it does
-not consume an analysis attempt. The analysis pipeline backs off while the
-transcription pipeline continues. Supabase or transcription-side infrastructure
-failure is likewise contained to the transcription loop while healthy analysis
-continues. Failures are logged using only the pipeline name, bounded error code,
+Ollama or model preflight failure occurs before an analysis or scorecard claim,
+so it does not consume an attempt. The affected pipeline backs off while the
+other pipelines continue. Supabase or transcription-side infrastructure failure
+is likewise contained to the transcription loop while healthy model pipelines
+continue. Failures are logged using only the pipeline name, bounded error code,
 and retry delay.
+
+## Phase 9A custom scorecards
+
+An owner or admin selects one stable workspace Playbook identity for future AI
+scorecards. When an eligible completed transcript is queued, the database
+resolves the newest published version at that moment and permanently pins its
+exact `playbook_version_id`. Changing the selection or publishing a later
+version never rewrites an existing scorecard. Historical eligible calls can be
+queued explicitly through the same bounded, idempotent database path.
+
+The dedicated local scorecard analyzer sends only the transcript, language hint,
+and ordered published criteria to loopback Ollama. Both transcript and Playbook
+text are untrusted data. The model has no tools, secrets, database, files, or
+external actions and may return only one validated outcome per criterion:
+`pass`, `fail`, `not_applicable`, or `insufficient_evidence`. Raw model output,
+reasoning, transcript copies, evidence snippets, and timestamps are not stored.
+Explainable evidence is intentionally deferred to a later phase.
+
+The model never supplies the numeric score. Database completion validates the
+exact criterion set, then calculates `passed eligible weight / total eligible
+weight * 100`, rounded half-up to two decimals. `not_applicable` is excluded
+from the denominator. `insufficient_evidence` is also excluded and sets
+`review_required`; zero eligible weight produces a null score and requires
+review. The shared Python helper cross-tests these same Phase 8B semantics, but
+the database remains authoritative for production persistence.
+
+This feature makes no model-accuracy claim. The repository evaluation dataset
+is synthetic and is not a human-reviewed production benchmark.
+The Phase 9A migration and scorecard feature are repository/local-only at this
+review point; they have not been deployed to hosted Supabase.
 
 Common startup and preflight codes are deliberately safe and actionable:
 
@@ -69,8 +101,8 @@ tight loop. An analysis preflight failure still occurs before a claim and does
 not consume a database attempt.
 
 Ctrl+C and supported termination signals set a shared stop event. Idle and
-backoff waits wake immediately, neither loop starts another job after observing
-shutdown, in-flight work is allowed to finish safely, and both pipelines close
+backoff waits wake immediately, no loop starts another job after observing
+shutdown, in-flight work is allowed to finish safely, and all pipelines close
 their owned HTTP clients before the process exits. This behavior uses standard
 Python threads and signals and is supported for local Windows development.
 
@@ -116,7 +148,7 @@ Both credential types belong only in this trusted server-side worker runtime.
 - Lease renewed every 60 seconds, completion requires current claim token.
 - SQL limits processing attempts to three and retry delay to five minutes.
 - Analysis checks local Ollama and the configured model before claiming work.
-- The supervisor isolates both loops and caps infrastructure retry backoff.
+- The supervisor isolates all three loops and caps infrastructure retry backoff.
 - Logs only status and safe machine-readable error codes, not transcripts,
   prompts, raw model responses, private audio, sensitive authorization headers,
   URLs, or HTTP response bodies. No hidden reasoning is persisted.

@@ -1,4 +1,4 @@
-"""Local supervisor for the isolated transcription and analysis pipelines.
+"""Local supervisor for transcription, analysis, and scorecard pipelines.
 
 Each pipeline owns its clients and runs in a separate thread. Failures are
 reported only as bounded internal codes, then retried with capped backoff.
@@ -22,6 +22,12 @@ from .analysis_worker import (
 )
 from .core import Gateway, Settings, WorkerError, process_one
 from .ollama import OllamaAnalyzer, OllamaSettings
+from .scorecard import OllamaScorecardAnalyzer
+from .scorecard_worker import (
+    ScorecardGateway,
+    ScorecardWorkerError,
+    process_one_scorecard,
+)
 from .transcriber import FasterWhisperTranscriber, TranscriptionStartupError
 
 
@@ -148,6 +154,54 @@ class _AnalysisRuntime:
             self._gateway.close()
 
 
+class _ScorecardRuntime:
+    def __init__(
+        self,
+        gateway: ScorecardGateway,
+        analyzer: OllamaScorecardAnalyzer,
+        *,
+        heartbeat_interval_seconds: float,
+    ) -> None:
+        self._gateway = gateway
+        self._analyzer = analyzer
+        self._heartbeat_interval_seconds = heartbeat_interval_seconds
+
+    @classmethod
+    def open(cls, *, heartbeat_interval_seconds: float) -> "_ScorecardRuntime":
+        try:
+            supabase_settings = Settings.from_env()
+        except ValueError as exc:
+            raise PipelineStartupError("worker_configuration_invalid") from exc
+        try:
+            ollama_settings = OllamaSettings.from_env()
+        except ValueError as exc:
+            raise PipelineStartupError("scorecard_configuration_invalid") from exc
+        gateway = ScorecardGateway(supabase_settings)
+        try:
+            analyzer = OllamaScorecardAnalyzer(ollama_settings)
+        except Exception:
+            gateway.close()
+            raise
+        return cls(
+            gateway,
+            analyzer,
+            heartbeat_interval_seconds=heartbeat_interval_seconds,
+        )
+
+    def process_one(self) -> bool:
+        return process_one_scorecard(
+            self._gateway,
+            self._analyzer,
+            heartbeat_interval_seconds=self._heartbeat_interval_seconds,
+        )
+
+    def close(self) -> None:
+        try:
+            self._analyzer.close()
+        finally:
+            self._gateway.close()
+
+
 def _close_runtime(name: str, runtime: PipelineRuntime | None) -> None:
     if runtime is None:
         return
@@ -229,7 +283,7 @@ def run_pipeline(spec: PipelineSpec, config: LoopConfig, stop: StopSignal) -> No
             try:
                 processed = runtime.process_one()
                 backoff_seconds = config.initial_backoff_seconds
-            except (WorkerError, AnalysisWorkerError) as exc:
+            except (WorkerError, AnalysisWorkerError, ScorecardWorkerError) as exc:
                 backoff_seconds, stopped = _wait_after_failure(
                     name=spec.name,
                     code=exc.code,
@@ -326,7 +380,7 @@ def _install_signal_handlers(stop: threading.Event) -> Callable[[], None]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Run CallScope transcription and analysis workers together"
+        description="Run CallScope transcription, analysis, and scorecard workers"
     )
     parser.add_argument(
         "--poll-seconds",
@@ -352,6 +406,12 @@ def main(argv: list[str] | None = None) -> int:
         default=60.0,
         help="Analysis lease-renewal interval (default: 60)",
     )
+    parser.add_argument(
+        "--scorecard-heartbeat-seconds",
+        type=float,
+        default=60.0,
+        help="Scorecard lease-renewal interval (default: 60)",
+    )
     args = parser.parse_args(argv)
 
     if not 5 <= args.poll_seconds <= 300:
@@ -364,6 +424,8 @@ def main(argv: list[str] | None = None) -> int:
         )
     if not 5 <= args.analysis_heartbeat_seconds <= 300:
         parser.error("--analysis-heartbeat-seconds must be between 5 and 300")
+    if not 5 <= args.scorecard_heartbeat_seconds <= 300:
+        parser.error("--scorecard-heartbeat-seconds must be between 5 and 300")
 
     configure_logging()
     config = LoopConfig(
@@ -379,6 +441,12 @@ def main(argv: list[str] | None = None) -> int:
             "analysis",
             lambda: _AnalysisRuntime.open(
                 heartbeat_interval_seconds=args.analysis_heartbeat_seconds
+            ),
+        ),
+        PipelineSpec(
+            "scorecard",
+            lambda: _ScorecardRuntime.open(
+                heartbeat_interval_seconds=args.scorecard_heartbeat_seconds
             ),
         ),
     )

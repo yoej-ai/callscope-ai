@@ -12,6 +12,10 @@ import callscope_worker.cli as transcription_cli
 import callscope_worker.supervisor as supervisor
 from callscope_worker.analysis_worker import AnalysisLeaseHeartbeat, AnalysisWorkerError
 from callscope_worker.core import LeaseHeartbeat, WorkerError
+from callscope_worker.scorecard_worker import (
+    ScorecardLeaseHeartbeat,
+    ScorecardWorkerError,
+)
 from callscope_worker.supervisor import (
     LoopConfig,
     PipelineSpec,
@@ -45,12 +49,13 @@ class RecordingStop:
         return len(self.waits) >= self.stop_after_waits
 
 
-def test_supervisor_runs_and_closes_both_pipelines() -> None:
+def test_supervisor_runs_and_closes_all_three_pipelines() -> None:
     stop = threading.Event()
-    barrier = threading.Barrier(2)
+    barrier = threading.Barrier(3)
     processed = {
         "transcription": threading.Event(),
         "analysis": threading.Event(),
+        "scorecard": threading.Event(),
     }
     runtimes: dict[str, FakeRuntime] = {}
 
@@ -86,7 +91,11 @@ def test_supervisor_runs_and_closes_both_pipelines() -> None:
 
 
 def test_heartbeat_shutdown_waits_for_active_renewal_thread() -> None:
-    for heartbeat_class in (LeaseHeartbeat, AnalysisLeaseHeartbeat):
+    for heartbeat_class in (
+        LeaseHeartbeat,
+        AnalysisLeaseHeartbeat,
+        ScorecardLeaseHeartbeat,
+    ):
         renewal_started = threading.Event()
         release_renewal = threading.Event()
 
@@ -188,6 +197,32 @@ def test_analysis_startup_reports_analysis_specific_configuration_code(
     assert sensitive_message not in str(error.value)
 
 
+def test_scorecard_startup_reports_scorecard_specific_configuration_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sensitive_message = "invalid local scorecard model URL with private material"
+    monkeypatch.setattr(
+        supervisor.Settings,
+        "from_env",
+        staticmethod(lambda: object()),
+    )
+
+    def invalid_ollama_settings():
+        raise ValueError(sensitive_message)
+
+    monkeypatch.setattr(
+        supervisor.OllamaSettings,
+        "from_env",
+        staticmethod(invalid_ollama_settings),
+    )
+
+    with pytest.raises(supervisor.PipelineStartupError) as error:
+        supervisor._ScorecardRuntime.open(heartbeat_interval_seconds=60)
+
+    assert error.value.code == "scorecard_configuration_invalid"
+    assert sensitive_message not in str(error.value)
+
+
 @pytest.mark.parametrize(
     ("failing_pipeline", "failure"),
     [
@@ -198,6 +233,10 @@ def test_analysis_startup_reports_analysis_specific_configuration_code(
         (
             "transcription",
             WorkerError("rpc_unavailable", retryable=True),
+        ),
+        (
+            "scorecard",
+            ScorecardWorkerError("scorecard_rpc_unavailable", retryable=True),
         ),
     ],
 )

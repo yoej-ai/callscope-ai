@@ -15,6 +15,10 @@ cascades, terminal-only manual retry, and deleting-call claim exclusion.
 Call-history coverage adds literal bounded search, lifecycle filtering,
 deterministic sorting, server-side pagination, response minimization, and tenant
 isolation without exposing transcript, AI, or worker-private fields.
+Custom-scorecard coverage adds stable workspace Playbook selection, exact
+published-version pinning, automatic and manual idempotent queueing, tenant RLS,
+least-privilege grants, claim/lease/retry behavior, strict exact-set completion,
+database-authoritative weighted scoring, and the four Phase 8B outcomes.
 
 Run it after installing Docker and the Supabase CLI:
 
