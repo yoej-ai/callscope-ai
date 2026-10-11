@@ -1,4 +1,4 @@
-"""Local supervisor for transcription, analysis, and scorecard pipelines.
+"""Local supervisor for four isolated CallScope processing pipelines.
 
 Each pipeline owns its clients and runs in a separate thread. Failures are
 reported only as bounded internal codes, then retried with capped backoff.
@@ -21,12 +21,23 @@ from .analysis_worker import (
     process_one_analysis,
 )
 from .core import Gateway, Settings, WorkerError, process_one
+from .diarization import (
+    DiarizationSettings,
+    DiarizationStartupError,
+    OllamaSpeakerRoleMapper,
+    PyannoteDiarizer,
+)
 from .ollama import OllamaAnalyzer, OllamaSettings
 from .scorecard import OllamaScorecardAnalyzer
 from .scorecard_worker import (
     ScorecardGateway,
     ScorecardWorkerError,
     process_one_scorecard,
+)
+from .speaker_worker import (
+    SpeakerGateway,
+    SpeakerWorkerError,
+    process_one_speaker_attribution,
 )
 from .transcriber import FasterWhisperTranscriber, TranscriptionStartupError
 
@@ -202,6 +213,67 @@ class _ScorecardRuntime:
             self._gateway.close()
 
 
+class _SpeakerAttributionRuntime:
+    def __init__(
+        self,
+        gateway: SpeakerGateway,
+        diarizer: PyannoteDiarizer,
+        role_mapper: OllamaSpeakerRoleMapper,
+        *,
+        heartbeat_interval_seconds: float,
+    ) -> None:
+        self._gateway = gateway
+        self._diarizer = diarizer
+        self._role_mapper = role_mapper
+        self._heartbeat_interval_seconds = heartbeat_interval_seconds
+
+    @classmethod
+    def open(cls, *, heartbeat_interval_seconds: float) -> "_SpeakerAttributionRuntime":
+        try:
+            supabase_settings = Settings.from_env()
+        except ValueError as exc:
+            raise PipelineStartupError("worker_configuration_invalid") from exc
+        try:
+            diarization_settings = DiarizationSettings.from_env()
+        except ValueError as exc:
+            raise PipelineStartupError("diarization_configuration_invalid") from exc
+        try:
+            ollama_settings = OllamaSettings.from_env()
+        except ValueError as exc:
+            raise PipelineStartupError("speaker_role_configuration_invalid") from exc
+        try:
+            diarizer = PyannoteDiarizer(diarization_settings)
+        except DiarizationStartupError as exc:
+            raise PipelineStartupError(exc.code) from exc
+
+        gateway = SpeakerGateway(supabase_settings)
+        try:
+            role_mapper = OllamaSpeakerRoleMapper(ollama_settings)
+        except Exception:
+            gateway.close()
+            raise
+        return cls(
+            gateway,
+            diarizer,
+            role_mapper,
+            heartbeat_interval_seconds=heartbeat_interval_seconds,
+        )
+
+    def process_one(self) -> bool:
+        return process_one_speaker_attribution(
+            self._gateway,
+            self._diarizer,
+            self._role_mapper,
+            heartbeat_interval_seconds=self._heartbeat_interval_seconds,
+        )
+
+    def close(self) -> None:
+        try:
+            self._role_mapper.close()
+        finally:
+            self._gateway.close()
+
+
 def _close_runtime(name: str, runtime: PipelineRuntime | None) -> None:
     if runtime is None:
         return
@@ -283,7 +355,12 @@ def run_pipeline(spec: PipelineSpec, config: LoopConfig, stop: StopSignal) -> No
             try:
                 processed = runtime.process_one()
                 backoff_seconds = config.initial_backoff_seconds
-            except (WorkerError, AnalysisWorkerError, ScorecardWorkerError) as exc:
+            except (
+                WorkerError,
+                AnalysisWorkerError,
+                ScorecardWorkerError,
+                SpeakerWorkerError,
+            ) as exc:
                 backoff_seconds, stopped = _wait_after_failure(
                     name=spec.name,
                     code=exc.code,
@@ -380,7 +457,7 @@ def _install_signal_handlers(stop: threading.Event) -> Callable[[], None]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Run CallScope transcription, analysis, and scorecard workers"
+        description="Run CallScope transcription, analysis, scorecard, and speaker workers"
     )
     parser.add_argument(
         "--poll-seconds",
@@ -412,6 +489,12 @@ def main(argv: list[str] | None = None) -> int:
         default=60.0,
         help="Scorecard lease-renewal interval (default: 60)",
     )
+    parser.add_argument(
+        "--speaker-heartbeat-seconds",
+        type=float,
+        default=60.0,
+        help="Speaker-attribution lease-renewal interval (default: 60)",
+    )
     args = parser.parse_args(argv)
 
     if not 5 <= args.poll_seconds <= 300:
@@ -426,6 +509,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--analysis-heartbeat-seconds must be between 5 and 300")
     if not 5 <= args.scorecard_heartbeat_seconds <= 300:
         parser.error("--scorecard-heartbeat-seconds must be between 5 and 300")
+    if not 5 <= args.speaker_heartbeat_seconds <= 300:
+        parser.error("--speaker-heartbeat-seconds must be between 5 and 300")
 
     configure_logging()
     config = LoopConfig(
@@ -447,6 +532,12 @@ def main(argv: list[str] | None = None) -> int:
             "scorecard",
             lambda: _ScorecardRuntime.open(
                 heartbeat_interval_seconds=args.scorecard_heartbeat_seconds
+            ),
+        ),
+        PipelineSpec(
+            "speaker-attribution",
+            lambda: _SpeakerAttributionRuntime.open(
+                heartbeat_interval_seconds=args.speaker_heartbeat_seconds
             ),
         ),
     )
