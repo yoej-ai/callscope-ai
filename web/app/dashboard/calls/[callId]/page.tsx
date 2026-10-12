@@ -569,6 +569,9 @@ function TranscriptionPanel({
             <summary>View plain transcript</summary>
             <p className="transcript-text">{transcription.transcriptText}</p>
           </details>
+          <div className="speaker-label-state completed" role="status">
+            <strong>Speaker labels complete</strong>
+          </div>
         </>
       ) : (
         <p className="transcript-text">{transcription.transcriptText}</p>
@@ -605,11 +608,22 @@ function TranscriptionPanel({
         <div className="speaker-label-state failed" role="status">
           <strong>Speaker labels could not be prepared</strong>
           <span>The completed plain transcript is unchanged and remains readable.</span>
+          {canAddSpeakerLabels && (
+            <SpeakerAttributionAction
+              callId={callId}
+              mode="retry"
+              workspaceId={workspaceId}
+            />
+          )}
         </div>
       )}
 
       {!speakerUnavailable && !speakerAttribution && canAddSpeakerLabels && (
-        <SpeakerAttributionAction callId={callId} workspaceId={workspaceId} />
+        <SpeakerAttributionAction
+          callId={callId}
+          mode="generate"
+          workspaceId={workspaceId}
+        />
       )}
 
       {transcription.completedAt && (

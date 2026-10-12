@@ -23,6 +23,7 @@ from .diarization import (
     apply_role_mapping,
     parse_transcript_segments,
 )
+from .ollama import OllamaError
 
 
 LOG = logging.getLogger("callscope_worker.speaker_attribution")
@@ -283,7 +284,12 @@ def process_one_speaker_attribution(
                 turns = align_segments_to_speakers(job.segments, intervals)
             except DiarizationError as exc:
                 raise SpeakerWorkerError(exc.code, retryable=exc.retryable) from exc
-            turns = apply_role_mapping(turns, role_mapper)
+            try:
+                turns = apply_role_mapping(turns, role_mapper)
+            except DiarizationError as exc:
+                raise SpeakerWorkerError(exc.code, retryable=exc.retryable) from exc
+            except OllamaError as exc:
+                raise SpeakerWorkerError(exc.code, retryable=exc.retryable) from exc
             if heartbeat.lost:
                 raise SpeakerWorkerError("speaker_lease_lost", retryable=True)
             if not gateway.complete(job, turns):

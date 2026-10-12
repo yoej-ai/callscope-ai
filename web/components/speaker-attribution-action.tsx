@@ -3,36 +3,62 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
-import { parseQueueSpeakerAttributionResult } from "@/lib/speaker-turns.mjs";
+import {
+  parseQueueSpeakerAttributionResult,
+  parseRetrySpeakerAttributionResult,
+} from "@/lib/speaker-turns.mjs";
 import { createClient } from "@/lib/supabase/client";
 
 export function SpeakerAttributionAction({
   callId,
+  mode,
   workspaceId,
 }: {
   callId: string;
+  mode: "generate" | "retry";
   workspaceId: string;
 }) {
   const router = useRouter();
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
-  async function queueSpeakerAttribution() {
+  async function submitSpeakerAttribution() {
     if (pending) return;
     setPending(true);
     setMessage(null);
     const supabase = createClient();
-    const { data, error } = await supabase.rpc("queue_call_speaker_attribution", {
-      p_workspace_id: workspaceId,
-      p_call_id: callId,
-    });
-    const result = parseQueueSpeakerAttributionResult(data);
-    if (error || !result || result.status === "ineligible") {
+    const { data, error } = mode === "retry"
+      ? await supabase.rpc("retry_call_speaker_attribution", {
+          p_workspace_id: workspaceId,
+          p_call_id: callId,
+        })
+      : await supabase.rpc("queue_call_speaker_attribution", {
+          p_workspace_id: workspaceId,
+          p_call_id: callId,
+        });
+    const result = mode === "retry"
+      ? parseRetrySpeakerAttributionResult(data)
+      : parseQueueSpeakerAttributionResult(data);
+    if (
+      error ||
+      !result ||
+      ("status" in result && result.status === "ineligible")
+    ) {
       setPending(false);
-      setMessage("Speaker labels could not be queued. Check the recording and try again.");
+      setMessage(
+        mode === "retry"
+          ? "Speaker detection could not be retried. Try again when processing is available."
+          : "Speaker labels could not be queued. Check the recording and try again.",
+      );
       return;
     }
-    setMessage(result.created ? "Speaker labels queued." : "Speaker labeling is already available or in progress.");
+    setMessage(
+      mode === "retry"
+        ? "Speaker detection queued again."
+        : "created" in result && result.created
+          ? "Speaker labels queued."
+          : "Speaker labeling is already available or in progress.",
+    );
     setPending(false);
     router.refresh();
   }
@@ -43,13 +69,25 @@ export function SpeakerAttributionAction({
         aria-busy={pending}
         className="button secondary compact"
         disabled={pending}
-        onClick={queueSpeakerAttribution}
+        onClick={submitSpeakerAttribution}
         type="button"
       >
-        {pending ? "Queuing speaker labels..." : "Add speaker labels"}
+        {pending
+          ? mode === "retry"
+            ? "Retrying speaker detection..."
+            : "Queuing speaker labels..."
+          : mode === "retry"
+            ? "Retry speaker detection"
+            : "Generate speaker labels"}
       </button>
+      {mode === "generate" && (
+        <p>
+          New calls are labeled automatically. Use this for older calls or if
+          automatic speaker detection was not queued.
+        </p>
+      )}
       {message && (
-        <p role={message.startsWith("Speaker labels could") ? "alert" : "status"}>
+        <p role={message.includes("could not") ? "alert" : "status"}>
           {message}
         </p>
       )}

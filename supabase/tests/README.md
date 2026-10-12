@@ -24,6 +24,10 @@ historical queueing, exact private-object eligibility, isolated claim/lease/retr
 lifecycle, atomic bounded turn validation, stable turn IDs, authoritative plain
 transcript preservation, tenant-only completed reads, and browser-private worker
 metadata.
+Speaker-role hardening additionally covers completed inserts and relevant
+self-healing events, late trusted call metadata, owner/admin-only failed-job
+retry, stable per-speaker roles, conservative one/two-speaker rules, legitimate
+multi-party repeated roles, and unchanged least-privilege boundaries.
 
 Run it after installing Docker and the Supabase CLI:
 

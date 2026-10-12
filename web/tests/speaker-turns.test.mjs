@@ -6,6 +6,7 @@ import {
   canManageSpeakerAttribution,
   formatTranscriptTimestamp,
   parseQueueSpeakerAttributionResult,
+  parseRetrySpeakerAttributionResult,
   parseSpeakerAttributionStatus,
   speakerDisplayLabel,
 } from "../lib/speaker-turns.mjs";
@@ -57,6 +58,28 @@ describe("speaker-attributed transcript presentation", () => {
     );
   });
 
+  it("parses only the narrow failed-job retry response", () => {
+    const callId = "20000000-0000-4000-8000-000000000091";
+    assert.deepEqual(
+      parseRetrySpeakerAttributionResult([
+        { call_id: callId, status: "queued" },
+      ]),
+      { callId, status: "queued" },
+    );
+    assert.equal(
+      parseRetrySpeakerAttributionResult([
+        { call_id: callId, status: "failed" },
+      ]),
+      null,
+    );
+    assert.equal(
+      parseRetrySpeakerAttributionResult([
+        { call_id: callId, status: "queued", claim_token: "hidden" },
+      ]),
+      null,
+    );
+  });
+
   it("renders completed turns and every safe fallback state", async () => {
     const [page, action] = await Promise.all([
       readFile(
@@ -72,8 +95,32 @@ describe("speaker-attributed transcript presentation", () => {
     assert.match(page, /Preparing speaker labels/);
     assert.match(page, /Identifying speakers/);
     assert.match(page, /Speaker labels could not be prepared/);
+    assert.match(page, /Speaker labels complete/);
     assert.match(page, /View plain transcript/);
-    assert.match(action, /Add speaker labels/);
+    assert.match(action, /Generate speaker labels/);
+    assert.match(action, /New calls are labeled automatically/);
+    assert.match(action, /Retry speaker detection/);
+    assert.match(action, /retry_call_speaker_attribution/);
+    assert.match(page, /speakerAttribution\?\.status === "failed"/);
+    assert.match(page, /canAddSpeakerLabels &&/);
+  });
+
+  it("explains automatic labeling and keeps failed retry manager-gated", async () => {
+    const [page, action] = await Promise.all([
+      readFile(
+        new URL("../app/dashboard/calls/[callId]/page.tsx", import.meta.url),
+        "utf8",
+      ),
+      readFile(
+        new URL("../components/speaker-attribution-action.tsx", import.meta.url),
+        "utf8",
+      ),
+    ]);
+    assert.match(action, /New calls are labeled automatically/);
+    assert.match(action, /Retry speaker detection/);
+    assert.match(action, /retry_call_speaker_attribution/);
+    assert.match(page, /speakerAttribution\?\.status === "failed"/);
+    assert.match(page, /canAddSpeakerLabels &&/);
   });
 
   it("queries only browser-safe speaker columns", async () => {

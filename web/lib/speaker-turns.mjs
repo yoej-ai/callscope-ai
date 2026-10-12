@@ -66,3 +66,19 @@ export function parseQueueSpeakerAttributionResult(value) {
     created: row.created,
   };
 }
+
+/** @param {unknown} value */
+export function parseRetrySpeakerAttributionResult(value) {
+  if (!Array.isArray(value) || value.length !== 1) return null;
+  const row = value[0];
+  if (!row || typeof row !== "object" || Array.isArray(row)) return null;
+  if (
+    Object.keys(row).sort().join(",") !== "call_id,status" ||
+    typeof row.call_id !== "string" ||
+    !UUID_RE.test(row.call_id) ||
+    row.status !== "queued"
+  ) {
+    return null;
+  }
+  return { callId: row.call_id, status: row.status };
+}
