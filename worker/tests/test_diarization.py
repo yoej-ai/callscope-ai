@@ -19,6 +19,8 @@ from callscope_worker.diarization import (
     TranscriptTurn,
     align_segments_to_speakers,
     apply_role_mapping,
+    build_balanced_role_rows,
+    normalize_role_mapping,
     normalize_diarization_intervals,
     parse_role_mapping,
     parse_transcript_segments,
@@ -167,6 +169,8 @@ def test_role_mapper_treats_prompt_injection_as_data_and_requests_no_tools() -> 
     assert seen["think"] is False
     messages = seen["messages"]
     assert "\\u003c/speaker_data\\u003e" in messages[1]["content"]
+    assert "call-wide" in messages[0]["content"]
+    assert "Transfers and conferences" in messages[0]["content"]
 
 
 def test_role_mapper_keeps_a_single_acoustic_cluster_unknown() -> None:
@@ -189,7 +193,7 @@ def test_role_mapper_keeps_a_single_acoustic_cluster_unknown() -> None:
     assert roles == {"speaker_1": "unknown"}
 
 
-def test_role_mapper_failure_leaves_every_turn_unknown() -> None:
+def test_role_mapper_failure_is_not_converted_to_successful_unknown() -> None:
     class FailingMapper:
         def map_roles(self, turns):
             raise RuntimeError("raw model response must not escape")
@@ -198,10 +202,72 @@ def test_role_mapper_failure_leaves_every_turn_unknown() -> None:
         TranscriptTurn(0, 0, 1000, "Hello", "speaker_1"),
         TranscriptTurn(1, 1000, 2000, "Hi", "speaker_2"),
     )
-    assert [turn.speaker_role for turn in apply_role_mapping(turns, FailingMapper())] == [
-        "unknown",
-        "unknown",
-    ]
+    with pytest.raises(RuntimeError, match="raw model response must not escape"):
+        apply_role_mapping(turns, FailingMapper())
+
+
+def test_balanced_role_rows_are_deterministic_bounded_and_call_wide() -> None:
+    turns = tuple(
+        TranscriptTurn(
+            index,
+            index * 1000,
+            (index + 1) * 1000,
+            f"turn-{index}-" + ("x" * 300),
+            "speaker_2" if index == 149 else "speaker_1",
+        )
+        for index in range(150)
+    )
+    first = build_balanced_role_rows(turns)
+    second = build_balanced_role_rows(turns)
+    assert first == second
+    assert len(first) == 120
+    assert sum(len(row["text"]) for row in first) <= 16_000
+    assert first[0]["start_ms"] == 0
+    assert any(70_000 <= row["start_ms"] <= 80_000 for row in first)
+    assert first[-1]["start_ms"] == 149_000
+    assert any(row["speaker_key"] == "speaker_2" for row in first)
+
+
+@pytest.mark.parametrize(
+    ("mapping", "expected"),
+    [
+        (
+            {"speaker_1": "agent", "speaker_2": "customer"},
+            {"speaker_1": "agent", "speaker_2": "customer"},
+        ),
+        (
+            {"speaker_1": "unknown", "speaker_2": "unknown"},
+            {"speaker_1": "unknown", "speaker_2": "unknown"},
+        ),
+        (
+            {"speaker_1": "agent", "speaker_2": "agent"},
+            {"speaker_1": "unknown", "speaker_2": "unknown"},
+        ),
+        (
+            {"speaker_1": "customer", "speaker_2": "customer"},
+            {"speaker_1": "unknown", "speaker_2": "unknown"},
+        ),
+        (
+            {"speaker_1": "agent", "speaker_2": "unknown"},
+            {"speaker_1": "unknown", "speaker_2": "unknown"},
+        ),
+        (
+            {"speaker_1": "unknown", "speaker_2": "customer"},
+            {"speaker_1": "unknown", "speaker_2": "unknown"},
+        ),
+    ],
+)
+def test_two_speaker_role_consistency_is_conservative(mapping, expected) -> None:
+    assert normalize_role_mapping(mapping, ["speaker_1", "speaker_2"]) == expected
+
+
+def test_multi_party_role_mapping_preserves_valid_repeated_roles() -> None:
+    mapping = {
+        "speaker_1": "agent",
+        "speaker_2": "agent",
+        "speaker_3": "customer",
+    }
+    assert normalize_role_mapping(mapping, sorted(mapping)) == mapping
 
 
 def test_pyannote_prefers_exclusive_output_and_bounds_speakers(

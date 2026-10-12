@@ -13,3 +13,7 @@ export function parseQueueSpeakerAttributionResult(value: unknown): {
   status: SpeakerAttributionStatus | "ineligible";
   created: boolean;
 } | null;
+export function parseRetrySpeakerAttributionResult(value: unknown): {
+  callId: string;
+  status: "queued";
+} | null;

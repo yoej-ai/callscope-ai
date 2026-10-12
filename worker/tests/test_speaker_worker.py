@@ -13,6 +13,7 @@ from callscope_worker.diarization import (
     DiarizationInterval,
     TranscriptTurn,
 )
+from callscope_worker.ollama import OllamaError
 from callscope_worker.speaker_worker import (
     SpeakerAttributionJob,
     SpeakerGateway,
@@ -225,3 +226,81 @@ def test_diarization_failure_uses_safe_retry_path(
     ) is True
     assert gateway.completed == []
     assert gateway.failed[0].code == "diarization_engine_failed"
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        OllamaError("speaker_role_mapper_unavailable", retryable=True),
+        DiarizationError("speaker_role_output_invalid", retryable=True),
+    ],
+)
+def test_role_mapper_failure_uses_safe_retry_path(
+    monkeypatch: pytest.MonkeyPatch,
+    error: Exception,
+) -> None:
+    class FailingRoleMapper:
+        def map_roles(self, turns):
+            raise error
+
+    gateway = FakeGateway()
+    monkeypatch.setattr(speaker_worker, "verify_media_magic", lambda path, mime: None)
+    assert process_one_speaker_attribution(
+        gateway,
+        FakeDiarizer(),
+        FailingRoleMapper(),
+        heartbeat_interval_seconds=3600,
+    ) is True
+    assert gateway.completed == []
+    assert gateway.failed[0].retryable is True
+    assert gateway.failed[0].code in {
+        "speaker_role_mapper_unavailable",
+        "speaker_role_output_invalid",
+    }
+
+
+@pytest.mark.parametrize(
+    ("mapping", "expected_roles"),
+    [
+        (
+            {"speaker_1": "agent", "speaker_2": "customer"},
+            ["agent", "customer"],
+        ),
+        (
+            {"speaker_1": "unknown", "speaker_2": "unknown"},
+            ["unknown", "unknown"],
+        ),
+        (
+            {"speaker_1": "agent", "speaker_2": "agent"},
+            ["unknown", "unknown"],
+        ),
+        (
+            {"speaker_1": "customer", "speaker_2": "customer"},
+            ["unknown", "unknown"],
+        ),
+        (
+            {"speaker_1": "agent", "speaker_2": "unknown"},
+            ["unknown", "unknown"],
+        ),
+    ],
+)
+def test_worker_completes_only_safe_two_speaker_role_pairs(
+    monkeypatch: pytest.MonkeyPatch,
+    mapping: dict[str, str],
+    expected_roles: list[str],
+) -> None:
+    class MappingRoleMapper:
+        def map_roles(self, turns):
+            return mapping
+
+    gateway = FakeGateway()
+    monkeypatch.setattr(speaker_worker, "verify_media_magic", lambda path, mime: None)
+    assert process_one_speaker_attribution(
+        gateway,
+        FakeDiarizer(),
+        MappingRoleMapper(),
+        heartbeat_interval_seconds=3600,
+    ) is True
+    assert gateway.failed == []
+    assert [turn.speaker_role for turn in gateway.completed[0]] == expected_roles
+    assert [turn.text for turn in gateway.completed[0]] == ["Hello", "Hi there"]

@@ -68,6 +68,14 @@ legitimate transcription completions enqueue one canonical speaker job; owners
 and admins may safely queue an eligible historical call without supplying a
 Storage path, labels, or worker metadata.
 
+The Phase 9B schema is deployed to hosted Supabase. New eligible completed
+transcriptions auto-queue speaker jobs, but queueing is not processing: the
+trusted `callscope-worker` supervisor must run continuously to claim them.
+Local validation remains zero-cost with the local Community-1 model, local
+Ollama, and local FFmpeg. Production will eventually require always-running
+trusted compute with private worker credentials and restart/health monitoring;
+no paid diarization or LLM service is required and no hosting vendor is selected.
+
 The approved Community-1 pyannote model runs locally on CPU and prefers its
 exclusive diarization output. The worker never uses pyannoteAI or another cloud
 diarization API. It deterministically aligns anonymous speaker intervals to the
@@ -110,9 +118,9 @@ the database remains authoritative for production persistence.
 
 This feature makes no model-accuracy claim. The repository evaluation dataset
 is synthetic and is not a human-reviewed production benchmark.
-The Phase 9A migration and scorecard feature have been deployed and smoke-tested
-on hosted Supabase. The Phase 9B speaker-attribution migration remains local-only
-at this review point and has not been deployed to hosted Supabase.
+The Phase 9A scorecard and Phase 9B speaker-attribution schemas have been
+deployed and smoke-tested on hosted Supabase. Later additive migrations remain
+undeployed until they complete their own review and deployment process.
 
 When local Ollama is already available, the clearly separated synthetic
 applicability smoke can be run from `worker/` with:
